@@ -55,6 +55,8 @@ def calculate_spread(
     contract_specs = {
         "okx": {"contract_size_btc": 0.01, "fee_pct": 0.05},
         "bybit": {"contract_size_btc": 1.0, "fee_pct": 0.1},
+        "binance": {"contract_size_btc": 1.0, "fee_pct": 0.05},
+        "deribit": {"contract_size_btc": 1.0, "fee_pct": 0.05},
     }
 
     margin_per_side = available_capital_usd / 2
@@ -118,20 +120,13 @@ def calculate_spread(
     roi_pct = (net_profit_usd / total_margin_used) * 100
     spread_pct = ((sell_price - buy_price) / buy_price) * 100
 
+    # Exchange-agnostic column names
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "bybit_bid": ticker1.bid_price
-        if ticker1.exchange == "bybit"
-        else ticker2.bid_price,
-        "bybit_ask": ticker1.ask_price
-        if ticker1.exchange == "bybit"
-        else ticker2.ask_price,
-        "okx_bid": ticker1.bid_price
-        if ticker1.exchange == "okx"
-        else ticker2.bid_price,
-        "okx_ask": ticker1.ask_price
-        if ticker1.exchange == "okx"
-        else ticker2.ask_price,
+        f"{ticker1.exchange}_bid": ticker1.bid_price,
+        f"{ticker1.exchange}_ask": ticker1.ask_price,
+        f"{ticker2.exchange}_bid": ticker2.bid_price,
+        f"{ticker2.exchange}_ask": ticker2.ask_price,
         "spread_pct": spread_pct,
         "gross_profit_usd": gross_profit,
         "total_fees_usd": total_fees,
@@ -151,14 +146,37 @@ def calculate_spread(
 
 
 def log_to_csv(spread_data: dict, symbol: str = "arbitrage_data"):
-    """Append spread calculation to CSV file"""
+    """Append spread calculation to CSV file with consistent field order."""
 
-    filepath = f"data/{symbol}.csv"
-    file_exists = Path(filepath).exists()
+    # Define consistent field order
+    base_fields = [
+        "timestamp",
+        "spread_pct",
+        "gross_profit_usd",
+        "total_fees_usd",
+        "net_profit_usd",
+        "roi_pct",
+        "is_profitable",
+        "buy_exchange",
+        "buy_price",
+        "sell_exchange",
+        "sell_price",
+        "btc_amount",
+        "notional_usd",
+        "margin_used_usd",
+        "liquidity_usd",
+        "leverage",
+    ]
+
+    # Extract exchange-specific fields dynamically
+    exchange_fields = [k for k in spread_data.keys() if k.endswith(("_bid", "_ask"))]
+    fieldnames = base_fields[:1] + sorted(exchange_fields) + base_fields[1:]
+
+    filepath = Path("data") / f"{symbol}.csv"
+    file_exists = filepath.exists()
 
     with open(filepath, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=spread_data.keys())
-
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         if not file_exists:
             writer.writeheader()
 

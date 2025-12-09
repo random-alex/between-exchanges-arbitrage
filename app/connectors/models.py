@@ -38,12 +38,30 @@ class Ticker(BaseModel):
         if self.exchange == "okx":
             return self.instrument_id.replace("-", "")
         elif self.exchange == "bybit":
-            normilized = "".join(
-                [
-                    self.instrument_id.split("-")[0],
-                    convert_date(self.instrument_id.split("-")[-1]),
-                ]
-            )
+            if len(self.instrument_id.split("-")) > 1:
+                normilized = "".join(
+                    [
+                        self.instrument_id.split("-")[0],
+                        convert_date(self.instrument_id.split("-")[-1]),
+                    ]
+                )
+            else:
+                normilized = self.instrument_id
+            return normilized
+        elif self.exchange == "binance":
+            # Binance format: BTCUSDT_251227 -> BTCUSDT251227
+            return self.instrument_id.replace("_", "")
+        elif self.exchange == "deribit":
+            # Deribit format: BTC-27DEC24 -> BTC27DEC24
+            if "USDC" in self.instrument_id:
+                normilized = self.instrument_id.replace("_USDC-PERPETUAL", "USDT")
+            else:
+                normilized = "USDT".join(
+                    [
+                        self.instrument_id.split("-")[0],
+                        convert_date(self.instrument_id.split("-")[-1]),
+                    ]
+                )
             return normilized
         else:
             return self.instrument_id.replace("-", "")
