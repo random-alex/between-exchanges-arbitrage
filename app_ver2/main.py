@@ -88,7 +88,7 @@ async def spread_monitor(exchange_data: dict[str, dict[str, Ticker]]) -> None:
                         capital=100,
                         leverage=10,
                         slippage=None,  # Dynamic based on liquidity
-                        min_spread_threshold=0.15,  # Skip spreads < 0.15%
+                        min_spread_threshold=0.05,  # Skip spreads < 0.15%
                     )
 
                     if spread:
