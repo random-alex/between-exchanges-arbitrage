@@ -32,17 +32,17 @@ async def spread_monitor():
             spread = calculate_spread(
                 bybit_ticker, okx_ticker, available_capital_usd=100, leverage=10
             )
+            if spread:
+                # Log every non None calculation
+                log_to_csv(spread, symbol=key)
 
-            # Log every calculation
-            log_to_csv(spread, symbol=key)
-
-            # Print opportunities
-            if spread["is_profitable"] and spread["roi_pct"] > 0.5:
-                print(
-                    f"🔥 {spread['roi_pct']:.2f}% ROI | "
-                    f"Spread: {spread['spread_pct']:.3f}% | "
-                    f"Profit: ${spread['net_profit_usd']:.2f}"
-                )
+                # Print opportunities
+                if spread["is_profitable"] and spread["roi_pct"] > 0.5:
+                    print(
+                        f"🔥 {spread['roi_pct']:.2f}% ROI | "
+                        f"Spread: {spread['spread_pct']:.3f}% | "
+                        f"Profit: ${spread['net_profit_usd']:.2f}"
+                    )
 
 
 def calculate_spread(
@@ -51,7 +51,7 @@ def calculate_spread(
     available_capital_usd: float = 100,
     leverage: float = 10.0,
     slippage_pct: float = 0.02,
-) -> dict:
+) -> dict | None:
     contract_specs = {
         "okx": {"contract_size_btc": 0.01, "fee_pct": 0.05},
         "bybit": {"contract_size_btc": 1.0, "fee_pct": 0.1},
@@ -103,13 +103,7 @@ def calculate_spread(
         sell_fee_pct = t1_spec["fee_pct"]
 
     else:
-        return {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "is_profitable": False,
-            "spread_pct": 0.0,
-            "net_profit_usd": 0.0,
-            "roi_pct": 0.0,
-        }
+        return None
 
     # Calculate profit assuming convergence
     btc_amount = actual_notional / buy_price
