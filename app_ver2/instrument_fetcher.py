@@ -83,8 +83,8 @@ class InstrumentFetcher:
         # Contract size for linear perpetuals/futures
         contract_size = 1.0
 
-        # Bybit taker fee is typically 0.055% for USDT perpetuals
-        fee_pct = 0.055
+        # Bybit taker fee is typically 0.1% for USDT perpetuals
+        fee_pct = 0.1
 
         return InstrumentSpec(
             contract_size=contract_size,
@@ -160,7 +160,7 @@ class InstrumentFetcher:
             if item["filterType"] == "MARKET_LOT_SIZE"
         ][0]
         # Binance taker fee is 0.05% for futures
-        fee_pct = 0.04
+        fee_pct = 0.05
 
         return InstrumentSpec(
             contract_size=contract_size,

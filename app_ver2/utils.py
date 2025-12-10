@@ -95,6 +95,7 @@ def calculate_spread(
     # Get contract specs from fetcher
     spec1 = instrument_fetcher.get_spec(t1.exchange, t1.instrument_id)
     spec2 = instrument_fetcher.get_spec(t2.exchange, t2.instrument_id)
+    fee_pct = spec1.fee_pct + spec2.fee_pct
 
     # Determine arbitrage direction and calculate relevant liquidity
     if t1.ask_price < t2.bid_price:
@@ -109,8 +110,6 @@ def calculate_spread(
         sell_liquidity_usd = t2.bid_qnt * spec2.contract_size * t2.bid_price
         liquidity = min(buy_liquidity_usd, sell_liquidity_usd)
 
-        fee_pct = spec1.fee_pct + spec2.fee_pct
-
     elif t2.ask_price < t1.bid_price:
         # Buy t2, sell t1
         base_buy_price = t2.ask_price
@@ -122,8 +121,6 @@ def calculate_spread(
         buy_liquidity_usd = t2.ask_qnt * spec2.contract_size * t2.ask_price
         sell_liquidity_usd = t1.bid_qnt * spec1.contract_size * t1.bid_price
         liquidity = min(buy_liquidity_usd, sell_liquidity_usd)
-
-        fee_pct = spec2.fee_pct + spec1.fee_pct
 
     else:
         return None  # No arbitrage opportunity

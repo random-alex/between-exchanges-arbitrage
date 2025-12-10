@@ -7,8 +7,8 @@ def load_config() -> dict[str, ConnectorConfig]:
     """Load connector configurations."""
 
     bybit_instruments = [
-        # "BTCUSDT-12DEC25",
-        # "BTCUSDT-19DEC25",
+        "BTCUSDT-12DEC25",
+        "BTCUSDT-19DEC25",
         "BTCUSDT-26DEC25",
         # "BTCUSDT-30JAN26",
         # "BTCUSDT-27MAR26",
@@ -18,14 +18,16 @@ def load_config() -> dict[str, ConnectorConfig]:
         # "ETHUSDT-26DEC25",
         # "ETHUSDT-27MAR26",
         "SOLUSDT",
-        # "ADAUSDT",
-        # "XRPUSDT",
+        "BTCUSDT",
+        "ETHUSDT",
+        "ADAUSDT",
+        "XRPUSDT",
     ]
 
     okx_instruments = [
         "BTC-USDT-251226",
-        # "BTC-USDT-251212",
-        # "BTC-USDT-251219",
+        "BTC-USDT-251212",
+        "BTC-USDT-251219",
         # "BTC-USDT-260130",
         # "BTC-USDT-260327",
         # "BTC-USDT-260626",
@@ -34,8 +36,10 @@ def load_config() -> dict[str, ConnectorConfig]:
         # "ETH-USDT-251219",
         # "ETH-USDT-260327",
         "SOL-USDT-SWAP",
-        # "ADA-USDT-SWAP",
-        # "XRP-USDT-SWAP",
+        "BTC-USDT-SWAP",
+        "ETH-USDT-SWAP",
+        "ADA-USDT-SWAP",
+        "XRP-USDT-SWAP",
     ]
 
     # Binance perpetual futures symbols
@@ -45,14 +49,16 @@ def load_config() -> dict[str, ConnectorConfig]:
         # "ETHUSDT_251226",
         # "ETHUSDT_260327",
         "SOLUSDT",
-        # "ADAUSDT",
-        # "XRPUSDT",
+        "ADAUSDT",
+        "XRPUSDT",
+        "BTCUSDT",
+        "ETHUSDT",
     ]
 
     # Deribit options and futures
     deribit_instruments = [
-        # "BTC-12DEC25",
-        # "BTC-19DEC25",
+        "BTC-12DEC25",
+        "BTC-19DEC25",
         "BTC-26DEC25",
         # "BTC-30JAN26",
         # "BTC-27MAR26",
@@ -62,8 +68,10 @@ def load_config() -> dict[str, ConnectorConfig]:
         # "ETH-26DEC25",
         # "ETH-27MAR26",
         "SOL_USDC-PERPETUAL",
-        # "ADA_USDC-PERPETUAL",
-        # "XRP_USDC-PERPETUAL",
+        "ADA_USDC-PERPETUAL",
+        "BTC_USDC-PERPETUAL",
+        "ETH_USDC-PERPETUAL",
+        "XRP_USDC-PERPETUAL",
     ]
 
     return {

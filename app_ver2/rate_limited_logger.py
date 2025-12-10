@@ -49,6 +49,10 @@ class RateLimitedLogger:
         self._queue_drops = 0
         self._connection_errors = 0
 
+        # Opportunity logging cooldowns
+        self._opportunity_cooldowns: Dict[str, float] = {}
+        self._opportunity_cooldown = 60.0  # Default 60s cooldown
+
     def _should_log(self, key: Tuple[str, str]) -> bool:
         """Check if enough time has passed to log this message again."""
         stats = self._stats[key]
@@ -170,3 +174,42 @@ class RateLimitedLogger:
     def force_summary(self):
         """Force log a summary now."""
         self._log_summary()
+
+    def log_opportunity(
+        self,
+        exchange1: str,
+        exchange2: str,
+        symbol: str,
+        message: str,
+        cooldown: float = 60,
+    ) -> bool:
+        """
+        Log an opportunity with cooldown to prevent spam.
+
+        Args:
+            exchange1: First exchange name
+            exchange2: Second exchange name
+            symbol: Trading symbol
+            message: Log message
+            cooldown: Cooldown in seconds (default: 60s)
+
+        Returns:
+            True if logged, False if suppressed due to cooldown
+        """
+        if cooldown is None:
+            cooldown = self._opportunity_cooldown
+
+        # Create unique key for this opportunity
+        key = f"{exchange1}:{exchange2}:{symbol}"
+
+        with self._lock:
+            now = time.time()
+            last_logged = self._opportunity_cooldowns.get(key, 0)
+
+            # Check if cooldown period has passed
+            if (now - last_logged) >= cooldown:
+                self.base_logger.info(message)
+                self._opportunity_cooldowns[key] = now
+                return True
+
+            return False

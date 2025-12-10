@@ -11,6 +11,7 @@ from app_ver2.utils import log_to_csv_async
 from utils import calculate_spread
 from rate_limited_logger import RateLimitedLogger
 from instrument_fetcher import InstrumentFetcher
+from position_manager import PositionDB, PositionManager, position_monitor
 
 # Setup logging
 logging.basicConfig(
@@ -24,6 +25,13 @@ logging.getLogger("pybit").setLevel(logging.WARNING)
 logging.getLogger("okx").setLevel(logging.WARNING)
 logging.getLogger("websocket").setLevel(logging.WARNING)
 logging.getLogger("websockets").setLevel(logging.WARNING)
+
+# Position Management Config
+MIN_ROI_TO_OPEN = 2.0
+STOP_LOSS_PCT = -10.0
+TARGET_CONVERGENCE_PCT = 0.1
+MAX_HOLD_TIME_HOURS = 24
+MIN_SPREAD_PCT = 1.5
 
 
 async def process_connector_messages(
@@ -51,7 +59,9 @@ async def process_connector_messages(
 
 
 async def spread_monitor(
-    exchange_data: dict[str, dict[str, Ticker]], instrument_fetcher: InstrumentFetcher
+    exchange_data: dict[str, dict[str, Ticker]],
+    instrument_fetcher: InstrumentFetcher,
+    position_manager: PositionManager,
 ) -> None:
     """Monitor spreads between all exchange pairs."""
     logger.info("🔍 Spread monitor started")
@@ -59,13 +69,13 @@ async def spread_monitor(
     while True:
         await asyncio.sleep(2)
 
-        # Get all exchange names
         exchanges = list(exchange_data.keys())
-
         if len(exchanges) < 2:
             continue
 
-        # Compare all exchange pairs
+        # Collect all spreads grouped by symbol
+        spreads_by_symbol = {}
+
         for i, exchange1 in enumerate(exchanges):
             for exchange2 in exchanges[i + 1 :]:
                 data1 = exchange_data[exchange1]
@@ -74,40 +84,85 @@ async def spread_monitor(
                 if not data1 or not data2:
                     continue
 
-                # Find common instruments
                 common_symbols = set(data1.keys()) & set(data2.keys())
 
                 for symbol in common_symbols:
                     ticker1 = data1[symbol]
                     ticker2 = data2[symbol]
 
-                    # Calculate spread with dynamic slippage
                     spread = calculate_spread(
                         ticker1,
                         ticker2,
                         instrument_fetcher,
                         capital=100,
                         leverage=10,
-                        slippage=None,  # Dynamic based on liquidity
-                        min_spread_threshold=0.05,  # Skip spreads < 0.05%
+                        slippage=None,
+                        min_spread_threshold=0.05,
                     )
 
                     if spread:
-                        # Log all calculations
                         await log_to_csv_async(
                             spread, symbol=f"{exchange1}_{exchange2}_{symbol}"
                         )
 
-                        # Print profitable opportunities
                         if spread["is_profitable"] and spread["roi_pct"] > 0.5:
-                            logger.info(
-                                f"🔥 {exchange1.upper()}/{exchange2.upper()} {symbol}: "
-                                f"{spread['roi_pct']:.4f}% ROI | "
-                                f"Spread: {spread['spread_pct']:.4f}% | "
-                                f"Profit: ${spread['net_profit_usd']:.4f} | "
-                                f"Buy: {spread['buy_exchange']} @ ${spread['buy_price']:.4f} | "
-                                f"Sell: {spread['sell_exchange']} @ ${spread['sell_price']:.4f}"
+                            if symbol not in spreads_by_symbol:
+                                spreads_by_symbol[symbol] = []
+
+                            spreads_by_symbol[symbol].append(
+                                {
+                                    "spread": spread,
+                                    "ticker1": ticker1,
+                                    "ticker2": ticker2,
+                                    "exchange1": exchange1,
+                                    "exchange2": exchange2,
+                                }
                             )
+
+        # Process each symbol: open best spreads while avoiding exchange conflicts
+        for symbol, opportunities in spreads_by_symbol.items():
+            # Sort by ROI descending (best first)
+            opportunities.sort(key=lambda x: x["spread"]["roi_pct"], reverse=True)
+
+            # Track which exchanges are already used for this symbol
+            used_exchanges = set()
+
+            for opp in opportunities:
+                spread = opp["spread"]
+                exchange1 = opp["exchange1"]
+                exchange2 = opp["exchange2"]
+
+                # Check if exchanges already used in another position for this symbol
+                if exchange1 in used_exchanges or exchange2 in used_exchanges:
+                    continue
+
+                # Log with cooldown to prevent spam (logs once per minute per opportunity)
+                main_logger.log_opportunity(
+                    exchange1,
+                    exchange2,
+                    symbol,
+                    f"🔥 {exchange1.upper()}/{exchange2.upper()} {symbol}: "
+                    f"{spread['roi_pct']:.4f}% ROI | "
+                    f"Spread: {spread['spread_pct']:.4f}% | "
+                    f"Profit: ${spread['net_profit_usd']:.4f} | "
+                    f"Buy: {spread['buy_exchange']} @ ${spread['buy_price']:.4f} | "
+                    f"Sell: {spread['sell_exchange']} @ ${spread['sell_price']:.4f}",
+                    cooldown=60.0,
+                )
+
+                can_open, reason = await position_manager.should_open(
+                    spread, symbol, exchange1, exchange2
+                )
+                if can_open:
+                    try:
+                        await position_manager.open_position(
+                            spread, opp["ticker1"], opp["ticker2"], symbol
+                        )
+                        # Mark exchanges as used
+                        used_exchanges.add(exchange1)
+                        used_exchanges.add(exchange2)
+                    except Exception as e:
+                        logger.error(f"Failed to open position: {e}")
 
 
 async def stats_monitor(*connectors) -> None:
@@ -147,6 +202,20 @@ async def main():
     instrument_fetcher = InstrumentFetcher()
     await instrument_fetcher.fetch_all(configs)
 
+    # Initialize position system
+    logger.info("💾 Initializing position database...")
+    db = PositionDB("data/positions.db")
+    await db.initialize()
+
+    position_manager = PositionManager(
+        db=db,
+        min_roi=MIN_ROI_TO_OPEN,
+        stop_loss_pct=STOP_LOSS_PCT,
+        target_convergence_pct=TARGET_CONVERGENCE_PCT,
+        max_hold_hours=MAX_HOLD_TIME_HOURS,
+        min_spread_cpt=MIN_SPREAD_PCT,
+    )
+
     # Create rate-limited loggers for each connector
     connector_loggers = {
         name: RateLimitedLogger(name, logger, window=10.0) for name in configs.keys()
@@ -184,7 +253,12 @@ async def main():
             )
 
         # Monitoring tasks
-        tasks.append(spread_monitor(exchange_data, instrument_fetcher))
+        tasks.append(
+            spread_monitor(exchange_data, instrument_fetcher, position_manager)
+        )
+        tasks.append(
+            position_monitor(position_manager, exchange_data, instrument_fetcher)
+        )
         tasks.append(stats_monitor(*connectors.values()))
 
         # Run all components concurrently
@@ -195,6 +269,7 @@ async def main():
         for connector in connectors.values():
             await connector.stop()
         await instrument_fetcher.close()
+        await db.close()
 
 
 if __name__ == "__main__":
