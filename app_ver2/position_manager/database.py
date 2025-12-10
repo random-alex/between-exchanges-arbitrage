@@ -16,13 +16,13 @@ logger = logging.getLogger(__name__)
 
 class PositionDB:
     """Efficient async database for position management."""
-    
+
     def __init__(self, db_path: str = "data/positions.db"):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(exist_ok=True)
-        
+
         db_url = f"sqlite+aiosqlite:///{self.db_path}"
-        
+
         # Optimized engine configuration
         self.engine: AsyncEngine = create_async_engine(
             db_url,
@@ -35,7 +35,7 @@ class PositionDB:
                 "timeout": 30,
             },
         )
-    
+
     @asynccontextmanager
     async def session(self):
         """Reusable session context manager for batch operations."""
@@ -46,20 +46,20 @@ class PositionDB:
             except Exception:
                 await session.rollback()
                 raise
-    
+
     async def initialize(self):
         """Initialize database schema."""
         async with self.engine.begin() as conn:
             await conn.run_sync(SQLModel.metadata.create_all)
         logger.info(f"Initialized database at {self.db_path}")
-    
+
     async def create_position(self, position: Position) -> int:
         """Create a new position and return its ID."""
         async with self.session() as session:
             session.add(position)
             await session.flush()  # Flush to get ID without closing session
             return position.id  # pyright: ignore[reportReturnType]
-    
+
     async def get_open_positions(self) -> list[Position]:
         """Get all open positions."""
         async with self.session() as session:
@@ -67,7 +67,7 @@ class PositionDB:
                 select(Position).where(Position.status == "open")
             )
             return list(result.all())
-    
+
     async def get_closed_positions(self, limit: int = 20) -> list[Position]:
         """Get closed positions ordered by close time (most recent first)."""
         async with self.session() as session:
@@ -78,7 +78,7 @@ class PositionDB:
                 .limit(limit)
             )
             return list(result.all())
-    
+
     async def has_open_position_for_symbol(self, symbol: str) -> bool:
         """Check if any open position exists for symbol."""
         async with self.session() as session:
@@ -88,7 +88,7 @@ class PositionDB:
                 .limit(1)
             )
             return result.first() is not None
-    
+
     async def has_open_position_for_symbol_and_exchanges(
         self, symbol: str, exchange1: str, exchange2: str
     ) -> bool:
@@ -109,19 +109,19 @@ class PositionDB:
                 .limit(1)
             )
             return result.first() is not None
-    
+
     async def get_position(self, position_id: int) -> Optional[Position]:
         """Get position by ID."""
         async with self.session() as session:
             return await session.get(Position, position_id)
-    
+
     async def close_position(self, position_id: int, exit_data: dict):
         """Close a position with exit data."""
         async with self.session() as session:
             position = await session.get(Position, position_id)
             if not position:
                 raise ValueError(f"Position {position_id} not found")
-            
+
             # Update position fields
             position.status = "closed"
             position.closed_at = datetime.now()
@@ -133,30 +133,36 @@ class PositionDB:
             position.net_profit_usd = exit_data["net_profit_usd"]
             position.roi_pct = exit_data["roi_pct"]
             position.close_reason = exit_data["close_reason"]
-            
+
             session.add(position)
             # Commit happens automatically via context manager
-    
+
     async def get_position_stats(self) -> dict:
         """Get aggregate position statistics efficiently."""
         async with self.session() as session:
             # Single query for counts
             counts_result = await session.exec(
                 select(
-                    func.sum(func.iif(Position.status == "open", 1, 0)).label("open_count"),
-                    func.sum(func.iif(Position.status == "closed", 1, 0)).label("closed_count"),
+                    func.sum(func.iif(Position.status == "open", 1, 0)).label(
+                        "open_count"
+                    ),
+                    func.sum(func.iif(Position.status == "closed", 1, 0)).label(
+                        "closed_count"
+                    ),
                 )
             )
             counts = counts_result.one()
             open_count = int(counts[0] or 0)
             closed_count = int(counts[1] or 0)
-            
+
             # Efficient aggregation for closed positions
             if closed_count > 0:
                 stats_result = await session.exec(
                     select(
                         func.sum(Position.net_profit_usd).label("total_pnl"),
-                        func.sum(func.iif(Position.net_profit_usd > 0, 1, 0)).label("wins"),
+                        func.sum(func.iif(Position.net_profit_usd > 0, 1, 0)).label(
+                            "wins"
+                        ),
                         func.avg(Position.roi_pct).label("avg_roi"),
                     ).where(Position.status == "closed")
                 )
@@ -169,7 +175,7 @@ class PositionDB:
                 total_pnl = 0.0
                 win_rate = 0.0
                 avg_roi = 0.0
-            
+
             return {
                 "open_positions": open_count,
                 "closed_positions": closed_count,
@@ -177,7 +183,7 @@ class PositionDB:
                 "win_rate_pct": win_rate,
                 "avg_roi_pct": avg_roi,
             }
-    
+
     async def close(self):
         """Dispose engine and close all connections."""
         await self.engine.dispose()
