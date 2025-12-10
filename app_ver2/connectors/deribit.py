@@ -2,26 +2,17 @@
 
 import asyncio
 import json
-import logging
-import sys
-from pathlib import Path
 from typing import Any
 import websockets
-
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from app.connectors.models import Ticker
-from .base import BaseConnector, ConnectorConfig
-
-logger = logging.getLogger(__name__)
+from app_ver2.connectors.models import Ticker
+from app_ver2.connectors.base import BaseConnector, ConnectorConfig
 
 
 class DeribitConnector(BaseConnector):
     """Deribit WebSocket connector with automatic reconnection."""
 
-    def __init__(self, config: ConnectorConfig):
-        super().__init__(config)
+    def __init__(self, config: ConnectorConfig, logger):
+        super().__init__(config, logger)
         self.ws: Any = None
         self.url = "wss://www.deribit.com/ws/api/v2"
         self._msg_id = 0
@@ -29,7 +20,7 @@ class DeribitConnector(BaseConnector):
     async def _connect(self) -> None:
         """Connect to Deribit WebSocket."""
         self.ws = await websockets.connect(self.url)
-        logger.debug(f"[{self.config.name}] Connected to Deribit")
+        self.logger.debug("Connected to Deribit")
 
     async def _subscribe(self) -> None:
         """Subscribe to orderbook streams."""
@@ -44,9 +35,7 @@ class DeribitConnector(BaseConnector):
             }
 
             await self.ws.send(json.dumps(subscribe_msg))
-            logger.debug(
-                f"[{self.config.name}] Subscribed to {len(channels)} instruments"
-            )
+            self.logger.debug(f"Subscribed to {len(channels)} instruments")
 
     async def _disconnect(self) -> None:
         """Close Deribit WebSocket connection."""
@@ -54,7 +43,9 @@ class DeribitConnector(BaseConnector):
             try:
                 await self.ws.close()
             except Exception as e:
-                logger.warning(f"[{self.config.name}] Disconnect error: {e}")
+                self.logger.base_logger.warning(
+                    f"[{self.config.name}] Disconnect error: {e}"
+                )
 
     async def _message_loop(self) -> None:
         """Process incoming messages."""
@@ -63,15 +54,17 @@ class DeribitConnector(BaseConnector):
                 message = await asyncio.wait_for(self.ws.recv(), timeout=30.0)
                 self._handle_message(message)
             except asyncio.TimeoutError:
-                logger.warning(
-                    f"[{self.config.name}] Message timeout, connection may be dead"
-                )
+                self.logger.base_logger.warning(f"[{self.config.name}] Message timeout")
                 raise
             except websockets.exceptions.ConnectionClosed:
-                logger.warning(f"[{self.config.name}] Connection closed")
+                self.logger.base_logger.warning(
+                    f"[{self.config.name}] Connection closed"
+                )
                 raise
             except Exception as e:
-                logger.error(f"[{self.config.name}] Message loop error: {e}")
+                self.logger.base_logger.error(
+                    f"[{self.config.name}] Message loop error: {e}"
+                )
                 raise
 
     def _handle_message(self, message: str) -> None:
@@ -79,7 +72,6 @@ class DeribitConnector(BaseConnector):
         try:
             data = json.loads(message)
 
-            # Deribit uses JSON-RPC 2.0 format
             if "params" not in data or "channel" not in data["params"]:
                 return
 
@@ -101,10 +93,10 @@ class DeribitConnector(BaseConnector):
             try:
                 self.queue.put_nowait(ticker)
             except asyncio.QueueFull:
-                logger.warning(f"[{self.config.name}] Queue full, dropping message")
+                self.logger.queue_full()
 
         except (KeyError, ValueError, json.JSONDecodeError) as e:
-            logger.warning(f"[{self.config.name}] Parse error: {e}")
+            self.logger.parse_error(e, message[:100])
 
     def _get_msg_id(self) -> int:
         """Get next message ID for JSON-RPC."""

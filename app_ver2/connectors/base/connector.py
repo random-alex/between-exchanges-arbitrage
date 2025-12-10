@@ -1,24 +1,24 @@
 """Base WebSocket connector with automatic reconnection."""
 
 import asyncio
-import logging
 from abc import ABC, abstractmethod
+
 
 from .config import ConnectorConfig
 from .state import ConnectionState
-
-logger = logging.getLogger(__name__)
+from rate_limited_logger import RateLimitedLogger
 
 
 class BaseConnector(ABC):
     """Abstract base class for exchange WebSocket connectors."""
 
-    def __init__(self, config: ConnectorConfig):
+    def __init__(self, config: ConnectorConfig, logger: RateLimitedLogger):
         self.config = config
         self.state = ConnectionState.DISCONNECTED
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=config.queue_size)
         self._retry_count = 0
         self._running = False
+        self.logger = logger
 
     @abstractmethod
     async def _connect(self) -> None:
@@ -46,9 +46,7 @@ class BaseConnector(ABC):
 
         while self._running and self._retry_count < self.config.max_retries:
             try:
-                logger.debug(
-                    f"[{self.config.name}] Connecting (attempt {self._retry_count + 1})"
-                )
+                self.logger.debug(f"Connecting (attempt {self._retry_count + 1})")
                 self.state = ConnectionState.CONNECTING
 
                 await self._connect()
@@ -56,30 +54,31 @@ class BaseConnector(ABC):
 
                 self.state = ConnectionState.CONNECTED
                 self._retry_count = 0
-                logger.info(f"[{self.config.name}] Connected successfully")
+                self.logger.info("Connected successfully")
 
                 await self._message_loop()
 
             except Exception as e:
                 self._retry_count += 1
                 self.state = ConnectionState.RECONNECTING
-                logger.error(
-                    f"[{self.config.name}] Connection failed: {e} "
-                    f"(retry {self._retry_count}/{self.config.max_retries})"
+                self.logger.connection_error(
+                    e, self._retry_count, self.config.max_retries
                 )
 
                 if self._retry_count >= self.config.max_retries:
-                    logger.error(f"[{self.config.name}] Max retries reached")
+                    self.logger.base_logger.error(
+                        f"[{self.config.name}] Max retries reached"
+                    )
                     self.state = ConnectionState.CLOSED
                     break
 
                 delay = self.config.calculate_backoff(self._retry_count - 1)
-                logger.info(f"[{self.config.name}] Reconnecting in {delay}s...")
+                self.logger.info(f"Reconnecting in {delay}s...")
                 await asyncio.sleep(delay)
 
     async def stop(self) -> None:
         """Stop the connector gracefully."""
-        logger.info(f"[{self.config.name}] Stopping...")
+        self.logger.info("Stopping...")
         self._running = False
         self.state = ConnectionState.CLOSED
         await self._disconnect()

@@ -2,24 +2,22 @@
 
 import asyncio
 import logging
-import sys
 import time
-from pathlib import Path
-
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config import load_config
 from connectors import BybitConnector, OKXConnector, BinanceConnector, DeribitConnector
-from app.connectors.models import Ticker
-from app.connectors.run_all import log_to_csv
+from app_ver2.connectors.models import Ticker
+from app_ver2.utils import log_to_csv_async
 from utils import calculate_spread
+from rate_limited_logger import RateLimitedLogger
+from instrument_fetcher import InstrumentFetcher
 
 # Setup logging
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+main_logger = RateLimitedLogger(__name__, base_logger=logger)
 
 # Suppress noisy third-party library logs
 logging.getLogger("pybit").setLevel(logging.WARNING)
@@ -34,25 +32,27 @@ async def process_connector_messages(
     """Process messages from a connector's queue."""
     while True:
         try:
-            ticker = await connector.queue.get()
+            ticker: Ticker = await connector.queue.get()
 
             # Check data staleness
             now = time.time() * 1000
-            if now - ticker.ts > connector.config.staleness_threshold * 1000:
-                logger.warning(
-                    f"[{name}] Stale data detected for {ticker.instrument_id}: "
-                    f"{(now - ticker.ts) / 1000:.1f}s old"
+            age_ms = now - ticker.ts
+            if age_ms > connector.config.staleness_threshold * 1000:
+                connector.logger.stale_data(
+                    ticker.normalized_instrument_id, age_ms / 1000
                 )
                 continue
 
-            # Store in shared data (note: using original typo'd attribute name)
-            data_store[ticker.normilized_intrument_id] = ticker
+            # Store in shared data
+            data_store[ticker.normalized_instrument_id] = ticker  # pyright: ignore[reportArgumentType]
 
         except Exception as e:
-            logger.error(f"[{name}] Message processing error: {e}")
+            main_logger.parse_error(e, "")
 
 
-async def spread_monitor(exchange_data: dict[str, dict[str, Ticker]]) -> None:
+async def spread_monitor(
+    exchange_data: dict[str, dict[str, Ticker]], instrument_fetcher: InstrumentFetcher
+) -> None:
     """Monitor spreads between all exchange pairs."""
     logger.info("🔍 Spread monitor started")
 
@@ -85,38 +85,55 @@ async def spread_monitor(exchange_data: dict[str, dict[str, Ticker]]) -> None:
                     spread = calculate_spread(
                         ticker1,
                         ticker2,
+                        instrument_fetcher,
                         capital=100,
                         leverage=10,
                         slippage=None,  # Dynamic based on liquidity
-                        min_spread_threshold=0.05,  # Skip spreads < 0.15%
+                        min_spread_threshold=0.05,  # Skip spreads < 0.05%
                     )
 
                     if spread:
                         # Log all calculations
-                        log_to_csv(spread, symbol=f"{exchange1}_{exchange2}_{symbol}")
+                        await log_to_csv_async(
+                            spread, symbol=f"{exchange1}_{exchange2}_{symbol}"
+                        )
 
                         # Print profitable opportunities
                         if spread["is_profitable"] and spread["roi_pct"] > 0.5:
                             logger.info(
                                 f"🔥 {exchange1.upper()}/{exchange2.upper()} {symbol}: "
-                                f"{spread['roi_pct']:.2f}% ROI | "
-                                f"Spread: {spread['spread_pct']:.3f}% | "
-                                f"Profit: ${spread['net_profit_usd']:.2f} | "
-                                f"Buy: {spread['buy_exchange']} @ ${spread['buy_price']:.2f} | "
-                                f"Sell: {spread['sell_exchange']} @ ${spread['sell_price']:.2f}"
+                                f"{spread['roi_pct']:.4f}% ROI | "
+                                f"Spread: {spread['spread_pct']:.4f}% | "
+                                f"Profit: ${spread['net_profit_usd']:.4f} | "
+                                f"Buy: {spread['buy_exchange']} @ ${spread['buy_price']:.4f} | "
+                                f"Sell: {spread['sell_exchange']} @ ${spread['sell_price']:.4f}"
                             )
 
 
-async def health_monitor(*connectors) -> None:
-    """Monitor connector health for all exchanges."""
+async def stats_monitor(*connectors) -> None:
+    """Monitor and log statistics periodically."""
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(300)  # Every 5 minutes
 
+        # Force summary of rate-limited logs
+        for connector in connectors:
+            connector.logger.force_summary()
+
+        # Log connector stats
+        stats_lines = ["📈 Connector Statistics (last 5 min):"]
         statuses = []
         for connector in connectors:
+            stats = connector.logger.get_stats()
+            stats_lines.append(
+                f"  • {connector.config.name}: "
+                f"{stats['parse_errors']} parse errors, "
+                f"{stats['queue_drops']} drops, "
+                f"{stats['connection_errors']} conn errors"
+            )
             status = "✅" if connector.is_connected() else "❌"
             statuses.append(f"{connector.config.name.capitalize()} {status}")
 
+        logger.info("\n".join(stats_lines))
         logger.info(f"Health: {' | '.join(statuses)}")
 
 
@@ -125,12 +142,22 @@ async def main():
     # Load configurations
     configs = load_config()
 
-    # Initialize connectors dynamically
+    # Fetch instrument specifications
+    logger.info("📡 Fetching instrument specifications...")
+    instrument_fetcher = InstrumentFetcher()
+    await instrument_fetcher.fetch_all(configs)
+
+    # Create rate-limited loggers for each connector
+    connector_loggers = {
+        name: RateLimitedLogger(name, logger, window=10.0) for name in configs.keys()
+    }
+
+    # Initialize connectors with their loggers
     connectors = {
-        "bybit": BybitConnector(configs["bybit"]),
-        "okx": OKXConnector(configs["okx"]),
-        "binance": BinanceConnector(configs["binance"]),
-        "deribit": DeribitConnector(configs["deribit"]),
+        "bybit": BybitConnector(configs["bybit"], connector_loggers["bybit"]),
+        "okx": OKXConnector(configs["okx"], connector_loggers["okx"]),
+        "binance": BinanceConnector(configs["binance"], connector_loggers["binance"]),
+        "deribit": DeribitConnector(configs["deribit"], connector_loggers["deribit"]),
     }
 
     # Shared data stores - one per exchange
@@ -157,8 +184,8 @@ async def main():
             )
 
         # Monitoring tasks
-        tasks.append(spread_monitor(exchange_data))
-        tasks.append(health_monitor(*connectors.values()))
+        tasks.append(spread_monitor(exchange_data, instrument_fetcher))
+        tasks.append(stats_monitor(*connectors.values()))
 
         # Run all components concurrently
         await asyncio.gather(*tasks)
@@ -167,6 +194,7 @@ async def main():
         logger.info("Shutting down...")
         for connector in connectors.values():
             await connector.stop()
+        await instrument_fetcher.close()
 
 
 if __name__ == "__main__":

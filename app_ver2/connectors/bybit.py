@@ -1,26 +1,17 @@
 """Bybit WebSocket connector."""
 
 import asyncio
-import logging
-import sys
-from pathlib import Path
 from typing import Optional
 from pybit.unified_trading import WebSocket
-
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-
-from app.connectors.models import Ticker
-from .base import BaseConnector, ConnectorConfig
-
-logger = logging.getLogger(__name__)
+from app_ver2.connectors.models import Ticker
+from app_ver2.connectors.base import BaseConnector, ConnectorConfig
 
 
 class BybitConnector(BaseConnector):
     """Bybit WebSocket connector with automatic reconnection."""
 
-    def __init__(self, config: ConnectorConfig):
-        super().__init__(config)
+    def __init__(self, config: ConnectorConfig, logger):
+        super().__init__(config, logger)
         self.ws: Optional[WebSocket] = None
 
     async def _connect(self) -> None:
@@ -40,7 +31,9 @@ class BybitConnector(BaseConnector):
             try:
                 self.ws.exit()
             except Exception as e:
-                logger.warning(f"[{self.config.name}] Disconnect error: {e}")
+                self.logger.base_logger.warning(
+                    f"[{self.config.name}] Disconnect error: {e}"
+                )
 
     def _handle_message(self, message: dict) -> None:
         """Handle incoming Bybit message (called from separate thread)."""
@@ -54,14 +47,13 @@ class BybitConnector(BaseConnector):
                 ts=int(message["ts"]),
                 exchange="bybit",
             )
-            # Use put_nowait (thread-safe, non-blocking)
             try:
                 self.queue.put_nowait(ticker)
             except asyncio.QueueFull:
-                logger.warning(f"[{self.config.name}] Queue full, dropping message")
+                self.logger.queue_full()
 
         except (KeyError, IndexError, ValueError) as e:
-            logger.warning(f"[{self.config.name}] Parse error: {e}")
+            self.logger.parse_error(e, str(message)[:100])
 
     async def _message_loop(self) -> None:
         """Keep connection alive."""

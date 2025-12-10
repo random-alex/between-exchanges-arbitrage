@@ -1,20 +1,48 @@
 """Utility functions for spread calculations."""
 
 from datetime import datetime, timezone
-import sys
 from pathlib import Path
+from app_ver2.connectors.models import Ticker
+from app_ver2.instrument_fetcher import InstrumentFetcher, InstrumentSpec
+import aiofiles
+import aiocsv
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from app.connectors.models import Ticker
+
+# Contract specifications are now fetched dynamically via InstrumentFetcher
 
 
-# Exchange contract specifications
-CONTRACT_SPECS = {
-    "okx": {"size_btc": 0.01, "fee_pct": 0.05},
-    "bybit": {"size_btc": 1.0, "fee_pct": 0.1},
-    "binance": {"size_btc": 1.0, "fee_pct": 0.05},
-    "deribit": {"size_btc": 1.0, "fee_pct": 0.05},
-}
+def validate_and_adjust_quantity(
+    quantity: float,
+    buy_spec: InstrumentSpec,
+    sell_spec: InstrumentSpec,
+) -> float | None:
+    """Validate and adjust order quantity to meet exchange requirements.
+
+    Args:
+        quantity: Desired order quantity (in base currency, e.g., BTC)
+        buy_spec: Instrument spec for buy exchange
+        sell_spec: Instrument spec for sell exchange
+
+    Returns:
+        Adjusted quantity that meets both exchanges' requirements, or None if impossible
+    """
+    # Check minimum order quantity for both exchanges
+    max_min_qty = max(buy_spec.min_order_qnt, sell_spec.min_order_qnt)
+
+    if quantity < max_min_qty:
+        return None
+
+    # Adjust to meet quantity step requirements (use larger step to satisfy both)
+    step = max(buy_spec.qnt_step, sell_spec.qnt_step)
+
+    # Round down to nearest valid step
+    adjusted_quantity = (quantity // step) * step
+
+    # Check if rounded quantity still meets minimum
+    if adjusted_quantity < max_min_qty:
+        return None
+
+    return adjusted_quantity
 
 
 def calculate_dynamic_slippage(notional: float, liquidity: float) -> float:
@@ -46,6 +74,7 @@ def calculate_dynamic_slippage(notional: float, liquidity: float) -> float:
 def calculate_spread(
     t1: Ticker,
     t2: Ticker,
+    instrument_fetcher: InstrumentFetcher,  # InstrumentFetcher instance
     capital: float = 100,
     leverage: float = 10.0,
     slippage: float | None = None,  # If None, use dynamic calculation
@@ -63,12 +92,9 @@ def calculate_spread(
     Returns:
         Dict with spread data or None if no arbitrage
     """
-    # Get contract specs
-    spec1 = CONTRACT_SPECS.get(t1.exchange)
-    spec2 = CONTRACT_SPECS.get(t2.exchange)
-
-    if not spec1 or not spec2:
-        return None
+    # Get contract specs from fetcher
+    spec1 = instrument_fetcher.get_spec(t1.exchange, t1.instrument_id)
+    spec2 = instrument_fetcher.get_spec(t2.exchange, t2.instrument_id)
 
     # Determine arbitrage direction and calculate relevant liquidity
     if t1.ask_price < t2.bid_price:
@@ -79,11 +105,11 @@ def calculate_spread(
         sell_exchange = t2.exchange
 
         # Only check liquidity on sides we're actually trading
-        buy_liquidity_usd = t1.ask_qnt * spec1["size_btc"] * t1.ask_price
-        sell_liquidity_usd = t2.bid_qnt * spec2["size_btc"] * t2.bid_price
+        buy_liquidity_usd = t1.ask_qnt * spec1.contract_size * t1.ask_price
+        sell_liquidity_usd = t2.bid_qnt * spec2.contract_size * t2.bid_price
         liquidity = min(buy_liquidity_usd, sell_liquidity_usd)
 
-        fee_pct = spec1["fee_pct"] + spec2["fee_pct"]
+        fee_pct = spec1.fee_pct + spec2.fee_pct
 
     elif t2.ask_price < t1.bid_price:
         # Buy t2, sell t1
@@ -93,11 +119,11 @@ def calculate_spread(
         sell_exchange = t1.exchange
 
         # Only check liquidity on sides we're actually trading
-        buy_liquidity_usd = t2.ask_qnt * spec2["size_btc"] * t2.ask_price
-        sell_liquidity_usd = t1.bid_qnt * spec1["size_btc"] * t1.bid_price
+        buy_liquidity_usd = t2.ask_qnt * spec2.contract_size * t2.ask_price
+        sell_liquidity_usd = t1.bid_qnt * spec1.contract_size * t1.bid_price
         liquidity = min(buy_liquidity_usd, sell_liquidity_usd)
 
-        fee_pct = spec2["fee_pct"] + spec1["fee_pct"]
+        fee_pct = spec2.fee_pct + spec1.fee_pct
 
     else:
         return None  # No arbitrage opportunity
@@ -121,8 +147,28 @@ def calculate_spread(
     buy_price = base_buy_price * (1 + slippage_pct / 100)
     sell_price = base_sell_price * (1 - slippage_pct / 100)
 
-    # Calculate profit
-    btc_amount = notional / buy_price
+    # Calculate initial quantity
+    initial_btc_amount = notional / buy_price
+
+    # Determine which spec is buy and which is sell
+    if buy_exchange == t1.exchange:
+        buy_spec = spec1
+        sell_spec = spec2
+    else:
+        buy_spec = spec2
+        sell_spec = spec1
+
+    # Validate and adjust quantity to meet exchange requirements
+    btc_amount = validate_and_adjust_quantity(initial_btc_amount, buy_spec, sell_spec)
+
+    if btc_amount is None:
+        # Order size too small or doesn't meet requirements
+        return None
+
+    # Recalculate notional with adjusted quantity
+    notional = btc_amount * buy_price
+
+    # Calculate profit with adjusted values
     gross_profit = (sell_price - buy_price) * btc_amount
 
     # Round-trip fees (open + close positions)
@@ -152,8 +198,58 @@ def calculate_spread(
         "sell_exchange": sell_exchange,
         "sell_price": sell_price,
         "btc_amount": btc_amount,
+        "initial_btc_amount": initial_btc_amount,
+        "buy_min_qty": buy_spec.min_order_qnt,
+        "sell_min_qty": sell_spec.min_order_qnt,
+        "buy_qty_step": buy_spec.qnt_step,
+        "sell_qty_step": sell_spec.qnt_step,
+        "quantity_adjusted": abs(btc_amount - initial_btc_amount) > 1e-10,
         "notional_usd": notional,
         "margin_used_usd": margin_used,
         "liquidity_usd": liquidity,
         "leverage": leverage,
     }
+
+
+async def log_to_csv_async(spread_data: dict, symbol: str = "arbitrage_data"):
+    """Async CSV logging that doesn't block the event loop."""
+    data_dir = Path(__file__).parent.parent / "data"
+    data_dir.mkdir(exist_ok=True)
+    filepath = data_dir / f"{symbol}.csv"
+
+    # Define consistent field order
+    base_fields = [
+        "timestamp",
+        "spread_pct",
+        "gross_profit_usd",
+        "total_fees_usd",
+        "net_profit_usd",
+        "roi_pct",
+        "is_profitable",
+        "buy_exchange",
+        "buy_price",
+        "sell_exchange",
+        "sell_price",
+        "btc_amount",
+        "initial_btc_amount",
+        "buy_min_qty",
+        "sell_min_qty",
+        "buy_qty_step",
+        "sell_qty_step",
+        "quantity_adjusted",
+        "notional_usd",
+        "margin_used_usd",
+        "liquidity_usd",
+        "leverage",
+    ]
+
+    exchange_fields = [k for k in spread_data.keys() if k.endswith(("_bid", "_ask"))]
+    fieldnames = base_fields[:1] + sorted(exchange_fields) + base_fields[1:]
+
+    file_exists = filepath.exists()
+
+    async with aiofiles.open(filepath, "a", newline="") as f:
+        writer = aiocsv.AsyncDictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        if not file_exists:
+            await writer.writeheader()
+        await writer.writerow(spread_data)

@@ -5,6 +5,8 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "aiocsv>=1.4.0",
+    "aiofiles>=25.1.0",
     "pandas>=2.3.3",
     "pybit>=5.13.0",
     "pydantic>=2.12.5",
