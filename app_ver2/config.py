@@ -7,9 +7,9 @@ def load_config() -> dict[str, ConnectorConfig]:
     """Load connector configurations."""
 
     bybit_instruments = [
-        "BTCUSDT-12DEC25",
-        "BTCUSDT-19DEC25",
-        "BTCUSDT-26DEC25",
+        # "BTCUSDT-12DEC25",
+        # "BTCUSDT-19DEC25",
+        # "BTCUSDT-26DEC25",
         # "BTCUSDT-30JAN26",
         # "BTCUSDT-27MAR26",
         # "BTCUSDT-26JUN26",
@@ -25,9 +25,9 @@ def load_config() -> dict[str, ConnectorConfig]:
     ]
 
     okx_instruments = [
-        "BTC-USDT-251226",
-        "BTC-USDT-251212",
-        "BTC-USDT-251219",
+        # "BTC-USDT-251226",
+        # "BTC-USDT-251212",
+        # "BTC-USDT-251219",
         # "BTC-USDT-260130",
         # "BTC-USDT-260327",
         # "BTC-USDT-260626",
@@ -44,7 +44,7 @@ def load_config() -> dict[str, ConnectorConfig]:
 
     # Binance perpetual futures symbols
     binance_instruments = [
-        "BTCUSDT_251226",
+        # "BTCUSDT_251226",
         # "BTCUSDT_260327",
         # "ETHUSDT_251226",
         # "ETHUSDT_260327",
@@ -57,9 +57,9 @@ def load_config() -> dict[str, ConnectorConfig]:
 
     # Deribit options and futures
     deribit_instruments = [
-        "BTC-12DEC25",
-        "BTC-19DEC25",
-        "BTC-26DEC25",
+        # "BTC-12DEC25",
+        # "BTC-19DEC25",
+        # "BTC-26DEC25",
         # "BTC-30JAN26",
         # "BTC-27MAR26",
         # "BTC-26JUN26",

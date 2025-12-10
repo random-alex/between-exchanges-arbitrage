@@ -67,7 +67,7 @@ async def spread_monitor(
     logger.info("🔍 Spread monitor started")
 
     while True:
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.5)
 
         exchanges = list(exchange_data.keys())
         if len(exchanges) < 2:
