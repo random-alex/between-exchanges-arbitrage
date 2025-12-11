@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from typing import Any
 import websockets
 
@@ -38,11 +39,24 @@ class BinanceConnector(BaseConnector):
                 self.logger.base_logger.warning(
                     f"[{self.config.name}] Disconnect error: {e}"
                 )
+            finally:
+                self.ws = None
 
     async def _message_loop(self) -> None:
-        """Process incoming messages."""
-        while self._running and self.ws:
+        """Process incoming messages with heartbeat."""
+        last_ping = time.time()
+
+        while self._running:
+            # Validate connection exists
+            if not self.ws:
+                raise ConnectionError("WebSocket connection lost")
+
             try:
+                # Send ping every 60 seconds to keep connection alive
+                if time.time() - last_ping > 60:
+                    await self.ws.ping()
+                    last_ping = time.time()
+
                 message = await asyncio.wait_for(self.ws.recv(), timeout=30.0)
                 self._handle_message(message)
             except asyncio.TimeoutError:
@@ -61,6 +75,9 @@ class BinanceConnector(BaseConnector):
 
     def _handle_message(self, message: str) -> None:
         """Handle incoming Binance message."""
+        # Update timestamp first, before any processing
+        self._update_message_timestamp()
+
         try:
             data = json.loads(message)
 
@@ -84,5 +101,5 @@ class BinanceConnector(BaseConnector):
             except asyncio.QueueFull:
                 self.logger.queue_full()
 
-        except (KeyError, ValueError, json.JSONDecodeError) as e:
+        except (KeyError, IndexError, ValueError, json.JSONDecodeError) as e:
             self.logger.parse_error(e, message[:100])

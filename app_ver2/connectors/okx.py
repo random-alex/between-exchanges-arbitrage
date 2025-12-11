@@ -19,8 +19,12 @@ class OKXConnector(BaseConnector):
 
     async def _connect(self) -> None:
         """Connect to OKX WebSocket."""
+        # Always create a fresh WebSocket object to avoid stale connection state
+        # The OKX library has internal state that doesn't handle reconnection well
         self.ws = WsPublicAsync(url=self.url)
         await self.ws.start()
+        # Give the connection a moment to establish
+        await asyncio.sleep(0.5)
 
     async def _subscribe(self) -> None:
         """Subscribe to orderbook streams."""
@@ -40,9 +44,18 @@ class OKXConnector(BaseConnector):
                 self.logger.base_logger.warning(
                     f"[{self.config.name}] Disconnect error: {e}"
                 )
+            finally:
+                self.ws = None
 
     def _handle_message(self, message: str) -> None:
         """Handle incoming OKX message (called from separate thread)."""
+        # Check if connector is being stopped (thread-safe)
+        if self._stop_event.is_set():
+            return
+
+        # Update timestamp first, before any processing
+        self._update_message_timestamp()
+
         try:
             data = json.loads(message)
             if "data" not in data:
@@ -57,6 +70,7 @@ class OKXConnector(BaseConnector):
                 ts=int(data["data"][0]["ts"]),
                 exchange="okx",
             )
+
             try:
                 self.queue.put_nowait(ticker)
             except asyncio.QueueFull:
@@ -66,6 +80,14 @@ class OKXConnector(BaseConnector):
             self.logger.parse_error(e, message[:100])
 
     async def _message_loop(self) -> None:
-        """Keep connection alive."""
+        """Monitor connection health and keep alive."""
+        self.logger.info("Message loop started, monitoring connection health...")
+
         while self._running:
-            await asyncio.sleep(1)
+            await asyncio.sleep(5)  # Check every 5 seconds
+
+            try:
+                self._check_connection_health()
+            except ConnectionError as e:
+                self.logger.base_logger.error(f"[{self.config.name}] {e}")
+                raise  # Trigger reconnection

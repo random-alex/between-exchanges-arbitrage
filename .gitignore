@@ -7,3 +7,6 @@ data_v2/**
 
 # Claude Flow generated files
 .letta/**
+.swarm
+.claude-flow
+CLAUDE**

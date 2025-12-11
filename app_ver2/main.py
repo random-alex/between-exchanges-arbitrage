@@ -40,7 +40,11 @@ async def process_connector_messages(
     """Process messages from a connector's queue."""
     while True:
         try:
-            ticker: Ticker = await connector.queue.get()
+            # Use timeout to detect if connector is dead (no messages flowing)
+            ticker: Ticker = await asyncio.wait_for(
+                connector.queue.get(),
+                timeout=60.0,  # 60 second timeout
+            )
 
             # Check data staleness
             now = time.time() * 1000
@@ -54,6 +58,14 @@ async def process_connector_messages(
             # Store in shared data
             data_store[ticker.normalized_instrument_id] = ticker  # pyright: ignore[reportArgumentType]
 
+        except asyncio.TimeoutError:
+            # No messages for 60 seconds - log but don't crash
+            # The connector's _message_loop should detect and reconnect
+            logger.warning(
+                f"{name}: No messages received for 60s. "
+                f"Connection state: {connector.state}"
+            )
+            continue
         except Exception as e:
             main_logger.parse_error(e, "")
 

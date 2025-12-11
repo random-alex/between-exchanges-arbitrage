@@ -31,18 +31,7 @@ async def load_open_positions():
 
 async def load_closed_positions(limit=20):
     db = get_db()
-    from sqlmodel import select
-    from sqlmodel.ext.asyncio.session import AsyncSession
-    from position_manager.models import Position
-
-    async with AsyncSession(db.engine) as session:
-        result = await session.exec(
-            select(Position)
-            .where(Position.status == "closed")
-            .order_by(Position.closed_at.desc())
-            .limit(limit)
-        )
-        return list(result.all())
+    return await db.get_closed_positions(limit)
 
 
 def main():
