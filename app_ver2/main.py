@@ -7,7 +7,6 @@ import time
 from config import load_config
 from connectors import BybitConnector, OKXConnector, BinanceConnector, DeribitConnector
 from app_ver2.connectors.models import Ticker
-from app_ver2.utils import log_to_csv_async
 from utils import calculate_spread
 from rate_limited_logger import RateLimitedLogger
 from instrument_fetcher import InstrumentFetcher
@@ -113,9 +112,9 @@ async def spread_monitor(
                     )
 
                     if spread:
-                        await log_to_csv_async(
-                            spread, symbol=f"{exchange1}_{exchange2}_{symbol}"
-                        )
+                        # await log_to_csv_async(
+                        #     spread, symbol=f"{exchange1}_{exchange2}_{symbol}"
+                        # )
 
                         if spread["is_profitable"] and spread["roi_pct"] > 0.5:
                             if symbol not in spreads_by_symbol:
