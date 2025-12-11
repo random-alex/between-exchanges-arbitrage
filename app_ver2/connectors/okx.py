@@ -2,8 +2,9 @@
 
 import asyncio
 import json
-from typing import Optional
-from okx.websocket.WsPublicAsync import WsPublicAsync
+import time
+from typing import Any
+import websockets
 
 from app_ver2.connectors.models import Ticker
 from app_ver2.connectors.base import BaseConnector, ConnectorConfig
@@ -14,17 +15,13 @@ class OKXConnector(BaseConnector):
 
     def __init__(self, config: ConnectorConfig, logger):
         super().__init__(config, logger)
-        self.ws: Optional[WsPublicAsync] = None
+        self.ws: Any = None
         self.url = "wss://wspap.okx.com:8443/ws/v5/public"
 
     async def _connect(self) -> None:
         """Connect to OKX WebSocket."""
-        # Always create a fresh WebSocket object to avoid stale connection state
-        # The OKX library has internal state that doesn't handle reconnection well
-        self.ws = WsPublicAsync(url=self.url)
-        await self.ws.start()
-        # Give the connection a moment to establish
-        await asyncio.sleep(0.5)
+        self.ws = await websockets.connect(self.url)
+        self.logger.debug("Connected to OKX")
 
     async def _subscribe(self) -> None:
         """Subscribe to orderbook streams."""
@@ -33,13 +30,15 @@ class OKXConnector(BaseConnector):
                 {"channel": "bbo-tbt", "instId": inst_id}
                 for inst_id in self.config.instruments
             ]
-            await self.ws.subscribe(args, callback=self._handle_message)
+            subscribe_msg = {"op": "subscribe", "args": args}
+            await self.ws.send(json.dumps(subscribe_msg))
+            self.logger.debug(f"Subscribed to {len(args)} instruments")
 
     async def _disconnect(self) -> None:
         """Close OKX WebSocket connection."""
         if self.ws:
             try:
-                await self.ws.stop()
+                await self.ws.close()
             except Exception as e:
                 self.logger.base_logger.warning(
                     f"[{self.config.name}] Disconnect error: {e}"
@@ -47,18 +46,47 @@ class OKXConnector(BaseConnector):
             finally:
                 self.ws = None
 
-    def _handle_message(self, message: str) -> None:
-        """Handle incoming OKX message (called from separate thread)."""
-        # Check if connector is being stopped (thread-safe)
-        if self._stop_event.is_set():
-            return
+    async def _message_loop(self) -> None:
+        """Process incoming messages with heartbeat."""
+        last_ping = time.time()
 
+        while self._running:
+            # Validate connection exists
+            if not self.ws:
+                raise ConnectionError("WebSocket connection lost")
+
+            try:
+                # Send ping every 20 seconds to keep connection alive
+                if time.time() - last_ping > 20:
+                    await self.ws.ping()
+                    last_ping = time.time()
+
+                message = await asyncio.wait_for(self.ws.recv(), timeout=30.0)
+                self._handle_message(message)
+            except asyncio.TimeoutError:
+                self.logger.base_logger.warning(f"[{self.config.name}] Message timeout")
+                raise
+            except websockets.exceptions.ConnectionClosed:
+                self.logger.base_logger.warning(
+                    f"[{self.config.name}] Connection closed"
+                )
+                raise
+            except Exception as e:
+                self.logger.base_logger.error(
+                    f"[{self.config.name}] Message loop error: {e}"
+                )
+                raise
+
+    def _handle_message(self, message: str) -> None:
+        """Handle incoming OKX message."""
         # Update timestamp first, before any processing
         self._update_message_timestamp()
 
         try:
             data = json.loads(message)
-            if "data" not in data:
+
+            # Skip subscription confirmation and other non-data messages
+            if "event" in data or "data" not in data:
                 return
 
             ticker = Ticker(
@@ -78,16 +106,3 @@ class OKXConnector(BaseConnector):
 
         except (KeyError, IndexError, ValueError, json.JSONDecodeError) as e:
             self.logger.parse_error(e, message[:100])
-
-    async def _message_loop(self) -> None:
-        """Monitor connection health and keep alive."""
-        self.logger.info("Message loop started, monitoring connection health...")
-
-        while self._running:
-            await asyncio.sleep(5)  # Check every 5 seconds
-
-            try:
-                self._check_connection_health()
-            except ConnectionError as e:
-                self.logger.base_logger.error(f"[{self.config.name}] {e}")
-                raise  # Trigger reconnection
