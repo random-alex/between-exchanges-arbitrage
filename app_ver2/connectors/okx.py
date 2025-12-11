@@ -42,7 +42,7 @@ class OKXConnector(BaseConnector):
 
     def _handle_message(self, message: str) -> None:
         """Handle incoming OKX message."""
-        # Update timestamp first, before any processing
+        # Update WebSocket liveness timestamp FIRST (any message)
         self._update_message_timestamp()
 
         try:
@@ -61,6 +61,9 @@ class OKXConnector(BaseConnector):
                 ts=int(data["data"][0]["ts"]),
                 exchange="okx",
             )
+
+            # Update data freshness timestamp AFTER successful parse
+            self._update_data_timestamp()
 
             try:
                 self.queue.put_nowait(ticker)

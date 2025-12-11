@@ -41,7 +41,7 @@ class BybitConnector(BaseConnector):
 
     def _handle_message(self, message: str) -> None:
         """Handle incoming Bybit message."""
-        # Update timestamp first, before any processing
+        # Update WebSocket liveness timestamp FIRST (any message)
         self._update_message_timestamp()
 
         try:
@@ -64,6 +64,9 @@ class BybitConnector(BaseConnector):
                 ts=int(data["ts"]),
                 exchange="bybit",
             )
+
+            # Update data freshness timestamp AFTER successful parse
+            self._update_data_timestamp()
 
             try:
                 self.queue.put_nowait(ticker)

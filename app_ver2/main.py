@@ -2,9 +2,8 @@
 
 import asyncio
 import logging
-import time
 
-from config import load_config
+from config import load_config, Config
 from connectors import BybitConnector, OKXConnector, BinanceConnector, DeribitConnector
 from app_ver2.connectors.models import Ticker
 from utils import calculate_spread
@@ -25,13 +24,6 @@ logging.getLogger("okx").setLevel(logging.WARNING)
 logging.getLogger("websocket").setLevel(logging.WARNING)
 logging.getLogger("websockets").setLevel(logging.WARNING)
 
-# Position Management Config
-MIN_ROI_TO_OPEN = 2.0
-STOP_LOSS_PCT = -10.0
-TARGET_CONVERGENCE_PCT = 0.1
-MAX_HOLD_TIME_HOURS = 24
-MIN_SPREAD_PCT = 1.5
-
 
 async def process_connector_messages(
     connector, data_store: dict[str, Ticker], name: str
@@ -39,34 +31,64 @@ async def process_connector_messages(
     """Process messages from a connector's queue."""
     while True:
         try:
-            # Use timeout to detect if connector is dead (no messages flowing)
             ticker: Ticker = await asyncio.wait_for(
-                connector.queue.get(),
-                timeout=60.0,  # 60 second timeout
+                connector.queue.get(), timeout=Config.QUEUE_TIMEOUT
             )
-
-            # Check data staleness
-            now = time.time() * 1000
-            age_ms = now - ticker.ts
-            if age_ms > connector.config.staleness_threshold * 1000:
-                connector.logger.stale_data(
-                    ticker.normalized_instrument_id, age_ms / 1000
-                )
-                continue
-
-            # Store in shared data
             data_store[ticker.normalized_instrument_id] = ticker  # pyright: ignore[reportArgumentType]
-
         except asyncio.TimeoutError:
-            # No messages for 60 seconds - log but don't crash
-            # The connector's _message_loop should detect and reconnect
-            logger.warning(
-                f"{name}: No messages received for 60s. "
-                f"Connection state: {connector.state}"
-            )
-            continue
+            logger.warning(f"{name}: No messages for {Config.QUEUE_TIMEOUT}s")
         except Exception as e:
             main_logger.parse_error(e, "")
+
+
+def _find_spreads(
+    exchange_data: dict[str, dict[str, Ticker]], instrument_fetcher: InstrumentFetcher
+) -> dict[str, list]:
+    """Find all profitable spreads across exchanges."""
+    spreads_by_symbol = {}
+    exchanges = list(exchange_data.keys())
+
+    for i, exchange1 in enumerate(exchanges):
+        for exchange2 in exchanges[i + 1 :]:
+            data1, data2 = exchange_data[exchange1], exchange_data[exchange2]
+            if not data1 or not data2:
+                continue
+
+            for symbol in set(data1.keys()) & set(data2.keys()):
+                spread = calculate_spread(
+                    data1[symbol],
+                    data2[symbol],
+                    instrument_fetcher,
+                    capital=Config.CAPITAL,
+                    leverage=Config.LEVERAGE,
+                    slippage=None,
+                    min_spread_threshold=Config.MIN_SPREAD_THRESHOLD,
+                )
+
+                if (
+                    spread
+                    and spread["is_profitable"]
+                    and spread["roi_pct"] > Config.MIN_ROI_FOR_LOGGING
+                ):
+                    if symbol not in spreads_by_symbol:
+                        spreads_by_symbol[symbol] = []
+                    spreads_by_symbol[symbol].append(
+                        {
+                            "spread": spread,
+                            "ticker1": data1[symbol],
+                            "ticker2": data2[symbol],
+                            "exchange1": exchange1,
+                            "exchange2": exchange2,
+                        }
+                    )
+
+    # Sort by ROI
+    for symbol in spreads_by_symbol:
+        spreads_by_symbol[symbol].sort(
+            key=lambda x: x["spread"]["roi_pct"], reverse=True
+        )
+
+    return spreads_by_symbol
 
 
 async def spread_monitor(
@@ -74,104 +96,50 @@ async def spread_monitor(
     instrument_fetcher: InstrumentFetcher,
     position_manager: PositionManager,
 ) -> None:
-    """Monitor spreads between all exchange pairs."""
+    """Monitor spreads between exchanges."""
     logger.info("🔍 Spread monitor started")
 
     while True:
-        await asyncio.sleep(1)
+        await asyncio.sleep(Config.SPREAD_CHECK_INTERVAL)
 
         exchanges = list(exchange_data.keys())
         if len(exchanges) < 2:
             continue
 
-        # Collect all spreads grouped by symbol
-        spreads_by_symbol = {}
+        spreads_by_symbol = _find_spreads(exchange_data, instrument_fetcher)
 
-        for i, exchange1 in enumerate(exchanges):
-            for exchange2 in exchanges[i + 1 :]:
-                data1 = exchange_data[exchange1]
-                data2 = exchange_data[exchange2]
-
-                if not data1 or not data2:
-                    continue
-
-                common_symbols = set(data1.keys()) & set(data2.keys())
-
-                for symbol in common_symbols:
-                    ticker1 = data1[symbol]
-                    ticker2 = data2[symbol]
-
-                    spread = calculate_spread(
-                        ticker1,
-                        ticker2,
-                        instrument_fetcher,
-                        capital=100,
-                        leverage=10,
-                        slippage=None,
-                        min_spread_threshold=0.05,
-                    )
-
-                    if spread:
-                        # await log_to_csv_async(
-                        #     spread, symbol=f"{exchange1}_{exchange2}_{symbol}"
-                        # )
-
-                        if spread["is_profitable"] and spread["roi_pct"] > 0.5:
-                            if symbol not in spreads_by_symbol:
-                                spreads_by_symbol[symbol] = []
-
-                            spreads_by_symbol[symbol].append(
-                                {
-                                    "spread": spread,
-                                    "ticker1": ticker1,
-                                    "ticker2": ticker2,
-                                    "exchange1": exchange1,
-                                    "exchange2": exchange2,
-                                }
-                            )
-
-        # Process each symbol: open best spreads while avoiding exchange conflicts
         for symbol, opportunities in spreads_by_symbol.items():
-            # Sort by ROI descending (best first)
-            opportunities.sort(key=lambda x: x["spread"]["roi_pct"], reverse=True)
-
-            # Track which exchanges are already used for this symbol
             used_exchanges = set()
 
             for opp in opportunities:
-                spread = opp["spread"]
-                exchange1 = opp["exchange1"]
-                exchange2 = opp["exchange2"]
+                spread, ex1, ex2 = opp["spread"], opp["exchange1"], opp["exchange2"]
 
-                # Check if exchanges already used in another position for this symbol
-                if exchange1 in used_exchanges or exchange2 in used_exchanges:
+                if ex1 in used_exchanges or ex2 in used_exchanges:
                     continue
 
-                # Log with cooldown to prevent spam (logs once per minute per opportunity)
                 main_logger.log_opportunity(
-                    exchange1,
-                    exchange2,
+                    ex1,
+                    ex2,
                     symbol,
-                    f"🔥 {exchange1.upper()}/{exchange2.upper()} {symbol}: "
+                    f"🔥 {ex1.upper()}/{ex2.upper()} {symbol}: "
                     f"{spread['roi_pct']:.4f}% ROI | "
                     f"Spread: {spread['spread_pct']:.4f}% | "
                     f"Profit: ${spread['net_profit_usd']:.4f} | "
                     f"Buy: {spread['buy_exchange']} @ ${spread['buy_price']:.4f} | "
                     f"Sell: {spread['sell_exchange']} @ ${spread['sell_price']:.4f}",
-                    cooldown=60.0,
+                    cooldown=Config.LOG_COOLDOWN,
                 )
 
-                can_open, reason = await position_manager.should_open(
-                    spread, symbol, exchange1, exchange2
+                can_open, _ = await position_manager.should_open(
+                    spread, symbol, ex1, ex2
                 )
                 if can_open:
                     try:
                         await position_manager.open_position(
                             spread, opp["ticker1"], opp["ticker2"], symbol
                         )
-                        # Mark exchanges as used
-                        used_exchanges.add(exchange1)
-                        used_exchanges.add(exchange2)
+                        used_exchanges.add(ex1)
+                        used_exchanges.add(ex2)
                     except Exception as e:
                         logger.error(f"Failed to open position: {e}")
 
@@ -179,7 +147,7 @@ async def spread_monitor(
 async def stats_monitor(*connectors) -> None:
     """Monitor and log statistics periodically."""
     while True:
-        await asyncio.sleep(300)  # Every 5 minutes
+        await asyncio.sleep(Config.STATS_INTERVAL)
 
         # Force summary of rate-limited logs
         for connector in connectors:
@@ -220,24 +188,26 @@ async def main():
 
     position_manager = PositionManager(
         db=db,
-        min_roi=MIN_ROI_TO_OPEN,
-        stop_loss_pct=STOP_LOSS_PCT,
-        target_convergence_pct=TARGET_CONVERGENCE_PCT,
-        max_hold_hours=MAX_HOLD_TIME_HOURS,
-        min_spread_cpt=MIN_SPREAD_PCT,
+        min_roi=Config.MIN_ROI_TO_OPEN,
+        stop_loss_pct=Config.STOP_LOSS_PCT,
+        target_convergence_pct=Config.TARGET_CONVERGENCE_PCT,
+        max_hold_hours=Config.MAX_HOLD_TIME_HOURS,
+        min_spread_cpt=Config.MIN_SPREAD_PCT,
     )
 
-    # Create rate-limited loggers for each connector
-    connector_loggers = {
-        name: RateLimitedLogger(name, logger, window=10.0) for name in configs.keys()
+    # Create rate-limited loggers and connectors
+    CONNECTOR_CLASSES = {
+        "bybit": BybitConnector,
+        "okx": OKXConnector,
+        "binance": BinanceConnector,
+        "deribit": DeribitConnector,
     }
 
-    # Initialize connectors with their loggers
     connectors = {
-        "bybit": BybitConnector(configs["bybit"], connector_loggers["bybit"]),
-        "okx": OKXConnector(configs["okx"], connector_loggers["okx"]),
-        "binance": BinanceConnector(configs["binance"], connector_loggers["binance"]),
-        "deribit": DeribitConnector(configs["deribit"], connector_loggers["deribit"]),
+        name: CONNECTOR_CLASSES[name](
+            config, RateLimitedLogger(name, logger, window=Config.LOGGER_WINDOW)
+        )
+        for name, config in configs.items()
     }
 
     # Shared data stores - one per exchange

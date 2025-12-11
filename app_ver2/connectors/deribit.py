@@ -47,7 +47,7 @@ class DeribitConnector(BaseConnector):
 
     def _handle_message(self, message: str) -> None:
         """Handle incoming Deribit message."""
-        # Update timestamp first, before any processing
+        # Update WebSocket liveness timestamp FIRST (any message)
         self._update_message_timestamp()
 
         try:
@@ -70,6 +70,9 @@ class DeribitConnector(BaseConnector):
                 ts=int(quote_data["timestamp"]),
                 exchange="deribit",
             )
+
+            # Update data freshness timestamp AFTER successful parse
+            self._update_data_timestamp()
 
             try:
                 self.queue.put_nowait(ticker)

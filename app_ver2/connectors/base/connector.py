@@ -23,7 +23,8 @@ class BaseConnector(ABC):
         self._retry_count = 0
         self._running = False
         self.logger = logger
-        self._last_message_time = time.time()
+        self._last_message_time = time.time()  # Any message (WebSocket liveness)
+        self._last_data_time = time.time()  # Only data messages (data freshness)
         self._connection_timeout = 30  # seconds without messages before reconnect
         self._stop_event = asyncio.Event()  # Thread-safe stop signal
         self.ws: Any = None  # WebSocket connection object
@@ -74,8 +75,9 @@ class BaseConnector(ABC):
                 self.ws = None
 
     async def _message_loop(self) -> None:
-        """Process incoming messages with heartbeat."""
+        """Process incoming messages with heartbeat and health monitoring."""
         last_ping = time.time()
+        last_health_check = time.time()
 
         while self._running:
             # Validate connection exists and is open
@@ -83,6 +85,11 @@ class BaseConnector(ABC):
                 raise ConnectionError("WebSocket connection lost")
 
             try:
+                # Periodic health check (every 5 seconds)
+                if time.time() - last_health_check > 5.0:
+                    self._check_connection_health()
+                    last_health_check = time.time()
+
                 # Send ping at exchange-specific interval
                 if time.time() - last_ping > self.ping_interval:
                     try:
@@ -95,12 +102,14 @@ class BaseConnector(ABC):
                         self.ws = None
                         raise ConnectionError(f"Ping failed: {e}")
 
-                message = await asyncio.wait_for(self.ws.recv(), timeout=30.0)
+                # Non-blocking receive with shorter timeout
+                message = await asyncio.wait_for(self.ws.recv(), timeout=10.0)
                 self._handle_message(message)
+
             except asyncio.TimeoutError:
-                self.logger.base_logger.warning(f"[{self.config.name}] Message timeout")
-                self.ws = None
-                raise
+                # recv() timeout - check health and continue
+                self._check_connection_health()
+                continue
             except websockets.exceptions.ConnectionClosed as e:
                 self.logger.base_logger.warning(
                     f"[{self.config.name}] Connection closed: {e}"
@@ -150,8 +159,9 @@ class BaseConnector(ABC):
                 self._retry_count = 0
                 self.logger.info("Connected successfully")
 
-                # Reset message timestamp for health monitoring
+                # Reset timestamps for health monitoring
                 self._last_message_time = time.time()
+                self._last_data_time = time.time()
 
                 await self._message_loop()
 
@@ -189,14 +199,32 @@ class BaseConnector(ABC):
         return self.state == ConnectionState.CONNECTED
 
     def _update_message_timestamp(self) -> None:
-        """Update last message timestamp (call from _handle_message)."""
+        """Update last message timestamp (call from _handle_message for any message)."""
         self._last_message_time = time.time()
 
+    def _update_data_timestamp(self) -> None:
+        """Update last data message timestamp (call after successful ticker parse)."""
+        self._last_data_time = time.time()
+
     def _check_connection_health(self) -> None:
-        """Check if connection is still alive based on message flow."""
-        time_since_last_message = time.time() - self._last_message_time
+        """Check if connection is still alive and data is fresh."""
+        now = time.time()
+
+        # Check WebSocket liveness (any message)
+        time_since_last_message = now - self._last_message_time
         if time_since_last_message > self._connection_timeout:
             raise ConnectionError(
                 f"No messages received for {time_since_last_message:.0f}s "
                 f"(timeout: {self._connection_timeout}s)"
+            )
+
+        # Check data freshness (actual ticker data)
+        time_since_last_data = now - self._last_data_time
+        staleness_limit = (
+            self.config.staleness_threshold * 3
+        )  # 3x threshold before reconnect
+        if time_since_last_data > staleness_limit:
+            raise ConnectionError(
+                f"Data stream stale: no ticker data for {time_since_last_data:.0f}s "
+                f"(limit: {staleness_limit:.0f}s)"
             )

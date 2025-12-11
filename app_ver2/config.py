@@ -3,75 +3,105 @@
 from connectors.base import ConnectorConfig
 
 
+class Config:
+    """Application configuration constants."""
+
+    # Position Management
+    MIN_ROI_TO_OPEN = 2.0
+    STOP_LOSS_PCT = -10.0
+    TARGET_CONVERGENCE_PCT = 0.1
+    MAX_HOLD_TIME_HOURS = 24
+    MIN_SPREAD_PCT = 1.5
+
+    # Spread Calculation
+    CAPITAL = 100.0
+    LEVERAGE = 10.0
+    MIN_SPREAD_THRESHOLD = 0.05
+    MIN_ROI_FOR_LOGGING = 0.5
+
+    # Monitoring
+    QUEUE_TIMEOUT = 60.0
+    STATS_INTERVAL = 300.0
+    SPREAD_CHECK_INTERVAL = 1.0
+    LOG_COOLDOWN = 60.0
+    LOGGER_WINDOW = 10.0
+
+
 def load_config() -> dict[str, ConnectorConfig]:
     """Load connector configurations."""
 
     bybit_instruments = [
-        # "BTCUSDT-12DEC25",
-        # "BTCUSDT-19DEC25",
         # "BTCUSDT-26DEC25",
-        # "BTCUSDT-30JAN26",
-        # "BTCUSDT-27MAR26",
-        # "BTCUSDT-26JUN26",
-        # "ETHUSDT-12DEC25",
-        # "ETHUSDT-19DEC25",
-        # "ETHUSDT-26DEC25",
-        # "ETHUSDT-27MAR26",
         "SOLUSDT",
         # "BTCUSDT",
         # "ETHUSDT",
         "ADAUSDT",
         "XRPUSDT",
+        "BNBUSDT",
+        "AVAXUSDT",
+        "DOGEUSDT",
+        "DOTUSDT",
+        "LINKUSDT",
+        "LTCUSDT",
+        "UNIUSDT",
+        "TRXUSDT",
+        "NEARUSDT",
+        "ALGOUSDT",
     ]
 
     okx_instruments = [
         # "BTC-USDT-251226",
-        # "BTC-USDT-251212",
-        # "BTC-USDT-251219",
-        # "BTC-USDT-260130",
-        # "BTC-USDT-260327",
-        # "BTC-USDT-260626",
-        # "ETH-USDT-251226",
-        # "ETH-USDT-251212",
-        # "ETH-USDT-251219",
-        # "ETH-USDT-260327",
         "SOL-USDT-SWAP",
         # "BTC-USDT-SWAP",
         # "ETH-USDT-SWAP",
         "ADA-USDT-SWAP",
         "XRP-USDT-SWAP",
+        "BNB-USDT-SWAP",
+        "AVAX-USDT-SWAP",
+        "DOGE-USDT-SWAP",
+        "DOT-USDT-SWAP",
+        "LINK-USDT-SWAP",
+        "LTC-USDT-SWAP",
+        "UNI-USDT-SWAP",
+        "TRX-USDT-SWAP",
+        "NEAR-USDT-SWAP",
+        "ALGO-USDT-SWAP",
     ]
 
     # Binance perpetual futures symbols
     binance_instruments = [
         # "BTCUSDT_251226",
-        # "BTCUSDT_260327",
-        # "ETHUSDT_251226",
-        # "ETHUSDT_260327",
         "SOLUSDT",
         "ADAUSDT",
         "XRPUSDT",
-        # "BTCUSDT",
-        # "ETHUSDT",
+        "BNBUSDT",
+        "AVAXUSDT",
+        "DOGEUSDT",
+        "DOTUSDT",
+        "LINKUSDT",
+        "LTCUSDT",
+        "UNIUSDT",
+        "TRXUSDT",
+        "NEARUSDT",
+        "ALGOUSDT",
     ]
 
     # Deribit options and futures
     deribit_instruments = [
-        # "BTC-12DEC25",
-        # "BTC-19DEC25",
         # "BTC-26DEC25",
-        # "BTC-30JAN26",
-        # "BTC-27MAR26",
-        # "BTC-26JUN26",
-        # "ETH-12DEC25",
-        # "ETH-19DEC25",
-        # "ETH-26DEC25",
-        # "ETH-27MAR26",
         "SOL_USDC-PERPETUAL",
         "ADA_USDC-PERPETUAL",
-        # "BTC_USDC-PERPETUAL",
-        # "ETH_USDC-PERPETUAL",
         "XRP_USDC-PERPETUAL",
+        "BNB_USDC-PERPETUAL",
+        "AVAX_USDC-PERPETUAL",
+        "DOGE_USDC-PERPETUAL",
+        "DOT_USDC-PERPETUAL",
+        "LINK_USDC-PERPETUAL",
+        "LTC_USDC-PERPETUAL",
+        "UNI_USDC-PERPETUAL",
+        "TRX_USDC-PERPETUAL",
+        "NEAR_USDC-PERPETUAL",
+        "ALGO_USDC-PERPETUAL",
     ]
 
     return {
