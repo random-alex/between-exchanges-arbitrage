@@ -20,8 +20,8 @@ def load_config() -> dict[str, ConnectorConfig]:
         "SOLUSDT",
         # "BTCUSDT",
         # "ETHUSDT",
-        # "ADAUSDT",
-        # "XRPUSDT",
+        "ADAUSDT",
+        "XRPUSDT",
     ]
 
     okx_instruments = [
@@ -38,8 +38,8 @@ def load_config() -> dict[str, ConnectorConfig]:
         "SOL-USDT-SWAP",
         # "BTC-USDT-SWAP",
         # "ETH-USDT-SWAP",
-        # "ADA-USDT-SWAP",
-        # "XRP-USDT-SWAP",
+        "ADA-USDT-SWAP",
+        "XRP-USDT-SWAP",
     ]
 
     # Binance perpetual futures symbols
@@ -49,8 +49,8 @@ def load_config() -> dict[str, ConnectorConfig]:
         # "ETHUSDT_251226",
         # "ETHUSDT_260327",
         "SOLUSDT",
-        # "ADAUSDT",
-        # "XRPUSDT",
+        "ADAUSDT",
+        "XRPUSDT",
         # "BTCUSDT",
         # "ETHUSDT",
     ]
@@ -68,10 +68,10 @@ def load_config() -> dict[str, ConnectorConfig]:
         # "ETH-26DEC25",
         # "ETH-27MAR26",
         "SOL_USDC-PERPETUAL",
-        # "ADA_USDC-PERPETUAL",
+        "ADA_USDC-PERPETUAL",
         # "BTC_USDC-PERPETUAL",
         # "ETH_USDC-PERPETUAL",
-        # "XRP_USDC-PERPETUAL",
+        "XRP_USDC-PERPETUAL",
     ]
 
     return {
