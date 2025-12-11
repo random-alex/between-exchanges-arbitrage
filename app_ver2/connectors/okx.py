@@ -2,8 +2,6 @@
 
 import asyncio
 import json
-import time
-from typing import Any
 import websockets
 
 from app_ver2.connectors.models import Ticker
@@ -15,8 +13,12 @@ class OKXConnector(BaseConnector):
 
     def __init__(self, config: ConnectorConfig, logger):
         super().__init__(config, logger)
-        self.ws: Any = None
         self.url = "wss://wspap.okx.com:8443/ws/v5/public"
+
+    @property
+    def ping_interval(self) -> float:
+        """Return ping interval in seconds."""
+        return 20.0
 
     async def _connect(self) -> None:
         """Connect to OKX WebSocket."""
@@ -34,48 +36,9 @@ class OKXConnector(BaseConnector):
             await self.ws.send(json.dumps(subscribe_msg))
             self.logger.debug(f"Subscribed to {len(args)} instruments")
 
-    async def _disconnect(self) -> None:
-        """Close OKX WebSocket connection."""
-        if self.ws:
-            try:
-                await self.ws.close()
-            except Exception as e:
-                self.logger.base_logger.warning(
-                    f"[{self.config.name}] Disconnect error: {e}"
-                )
-            finally:
-                self.ws = None
-
-    async def _message_loop(self) -> None:
-        """Process incoming messages with heartbeat."""
-        last_ping = time.time()
-
-        while self._running:
-            # Validate connection exists
-            if not self.ws:
-                raise ConnectionError("WebSocket connection lost")
-
-            try:
-                # Send ping every 20 seconds to keep connection alive
-                if time.time() - last_ping > 20:
-                    await self.ws.ping()
-                    last_ping = time.time()
-
-                message = await asyncio.wait_for(self.ws.recv(), timeout=30.0)
-                self._handle_message(message)
-            except asyncio.TimeoutError:
-                self.logger.base_logger.warning(f"[{self.config.name}] Message timeout")
-                raise
-            except websockets.exceptions.ConnectionClosed:
-                self.logger.base_logger.warning(
-                    f"[{self.config.name}] Connection closed"
-                )
-                raise
-            except Exception as e:
-                self.logger.base_logger.error(
-                    f"[{self.config.name}] Message loop error: {e}"
-                )
-                raise
+    async def _send_ping(self) -> None:
+        """Send WebSocket ping."""
+        await self.ws.ping()
 
     def _handle_message(self, message: str) -> None:
         """Handle incoming OKX message."""

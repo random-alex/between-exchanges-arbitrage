@@ -3,7 +3,10 @@
 import asyncio
 import time
 from abc import ABC, abstractmethod
+from typing import Any
 
+import websockets
+from websockets.protocol import State
 
 from .config import ConnectorConfig
 from .state import ConnectionState
@@ -23,15 +26,17 @@ class BaseConnector(ABC):
         self._last_message_time = time.time()
         self._connection_timeout = 30  # seconds without messages before reconnect
         self._stop_event = asyncio.Event()  # Thread-safe stop signal
+        self.ws: Any = None  # WebSocket connection object
+
+    @property
+    @abstractmethod
+    def ping_interval(self) -> float:
+        """Seconds between ping messages (exchange-specific)."""
+        pass
 
     @abstractmethod
     async def _connect(self) -> None:
         """Establish WebSocket connection."""
-        pass
-
-    @abstractmethod
-    async def _disconnect(self) -> None:
-        """Close WebSocket connection."""
         pass
 
     @abstractmethod
@@ -40,9 +45,74 @@ class BaseConnector(ABC):
         pass
 
     @abstractmethod
-    async def _message_loop(self) -> None:
-        """Process incoming messages."""
+    async def _send_ping(self) -> None:
+        """Send ping to keep connection alive (exchange-specific format)."""
         pass
+
+    @abstractmethod
+    def _handle_message(self, message: str) -> None:
+        """Handle incoming message (exchange-specific parsing)."""
+        pass
+
+    async def _disconnect(self) -> None:
+        """Close WebSocket connection."""
+        if self.ws:
+            try:
+                # Check if connection is still open before attempting close
+                if self.ws.state != State.CLOSED:
+                    await asyncio.wait_for(self.ws.close(), timeout=5.0)
+            except asyncio.TimeoutError:
+                self.logger.base_logger.warning(
+                    f"[{self.config.name}] Disconnect timeout"
+                )
+            except Exception as e:
+                # Silently handle errors for already-closed connections
+                self.logger.base_logger.debug(
+                    f"[{self.config.name}] Disconnect error: {e}"
+                )
+            finally:
+                self.ws = None
+
+    async def _message_loop(self) -> None:
+        """Process incoming messages with heartbeat."""
+        last_ping = time.time()
+
+        while self._running:
+            # Validate connection exists and is open
+            if not self.ws or self.ws.state != State.OPEN:
+                raise ConnectionError("WebSocket connection lost")
+
+            try:
+                # Send ping at exchange-specific interval
+                if time.time() - last_ping > self.ping_interval:
+                    try:
+                        await self._send_ping()
+                        last_ping = time.time()
+                    except Exception as e:
+                        self.logger.base_logger.warning(
+                            f"[{self.config.name}] Ping failed: {e}"
+                        )
+                        self.ws = None
+                        raise ConnectionError(f"Ping failed: {e}")
+
+                message = await asyncio.wait_for(self.ws.recv(), timeout=30.0)
+                self._handle_message(message)
+            except asyncio.TimeoutError:
+                self.logger.base_logger.warning(f"[{self.config.name}] Message timeout")
+                self.ws = None
+                raise
+            except websockets.exceptions.ConnectionClosed as e:
+                self.logger.base_logger.warning(
+                    f"[{self.config.name}] Connection closed: {e}"
+                )
+                self.ws = None
+                raise
+            except Exception as e:
+                self.logger.base_logger.error(
+                    f"[{self.config.name}] Message loop error: {e}"
+                )
+                self.ws = None
+                raise
 
     async def connect_with_retry(self) -> None:
         """Connect with automatic retry on failure."""
