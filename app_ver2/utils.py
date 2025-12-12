@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from app_ver2.connectors.models import Ticker
 from app_ver2.instrument_fetcher import InstrumentFetcher, InstrumentSpec
+from app_ver2.position_manager.calculations import calculate_fees
 import aiofiles
 import aiocsv
 
@@ -95,7 +96,6 @@ def calculate_spread(
     # Get contract specs from fetcher
     spec1 = instrument_fetcher.get_spec(t1.exchange, t1.instrument_id)
     spec2 = instrument_fetcher.get_spec(t2.exchange, t2.instrument_id)
-    fee_pct = spec1.fee_pct + spec2.fee_pct
 
     # Determine arbitrage direction and calculate relevant liquidity
     if t1.ask_price < t2.bid_price:
@@ -168,10 +168,16 @@ def calculate_spread(
     # Calculate profit with adjusted values
     gross_profit = (sell_price - buy_price) * btc_amount
 
-    # Round-trip fees (open + close positions)
-    total_fees = notional * fee_pct / 100 * 2
+    # Calculate entry fees using actual prices (one-way only)
+    entry_fees = calculate_fees(
+        btc_amount, buy_price, sell_price, buy_spec.fee_pct, sell_spec.fee_pct
+    )
 
-    net_profit = gross_profit - total_fees
+    # For ROI estimation, assume similar exit fees
+    estimated_exit_fees = entry_fees
+    estimated_total_fees = entry_fees + estimated_exit_fees
+
+    net_profit = gross_profit - estimated_total_fees
     margin_used = (notional / leverage) * 2
     roi = (net_profit / margin_used) * 100
     spread_pct = ((sell_price - buy_price) / buy_price) * 100
@@ -186,14 +192,15 @@ def calculate_spread(
         "spread_pct": spread_pct,
         "slippage_pct": slippage_pct,
         "gross_profit_usd": gross_profit,
-        "total_fees_usd": total_fees,
+        "entry_fees_usd": entry_fees,  # One-way entry fees
+        "estimated_total_fees_usd": estimated_total_fees,  # Estimated round-trip
         "net_profit_usd": net_profit,
         "roi_pct": roi,
         "is_profitable": net_profit > 0,
-        "buy_exchange": buy_exchange,
-        "buy_price": buy_price,
-        "sell_exchange": sell_exchange,
-        "sell_price": sell_price,
+        "long_exchange": buy_exchange,  # Exchange where we're long
+        "entry_long_price": buy_price,  # Entry price on long exchange
+        "short_exchange": sell_exchange,  # Exchange where we're short
+        "entry_short_price": sell_price,  # Entry price on short exchange
         "btc_amount": btc_amount,
         "initial_btc_amount": initial_btc_amount,
         "buy_min_qty": buy_spec.min_order_qnt,

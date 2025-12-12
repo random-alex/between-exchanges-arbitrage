@@ -51,29 +51,28 @@ class PositionManager:
     async def open_position(self, spread: dict, ticker1, ticker2, symbol: str) -> int:
         buy_instrument = (
             ticker1.instrument_id
-            if spread["buy_exchange"] == ticker1.exchange
+            if spread["long_exchange"] == ticker1.exchange
             else ticker2.instrument_id
         )
         sell_instrument = (
             ticker1.instrument_id
-            if spread["sell_exchange"] == ticker1.exchange
+            if spread["short_exchange"] == ticker1.exchange
             else ticker2.instrument_id
         )
 
         position = Position(
             symbol=symbol,
-            buy_exchange=spread["buy_exchange"],
+            long_exchange=spread["long_exchange"],
             buy_instrument=buy_instrument,
-            sell_exchange=spread["sell_exchange"],
+            short_exchange=spread["short_exchange"],
             sell_instrument=sell_instrument,
-            entry_buy_price=spread["buy_price"],
-            entry_sell_price=spread["sell_price"],
+            entry_long_price=spread["entry_long_price"],
+            entry_short_price=spread["entry_short_price"],
             entry_spread_pct=spread["spread_pct"],
             quantity=spread["btc_amount"],
             notional_usd=spread["notional_usd"],
             margin_used_usd=spread["margin_used_usd"],
-            entry_fees_usd=spread["total_fees_usd"]
-            / 2,  # Entry fees only (half of round-trip)
+            entry_fees_usd=spread["entry_fees_usd"],
             entry_buy_min_qty=spread["buy_min_qty"],
             entry_sell_min_qty=spread["sell_min_qty"],
             entry_buy_qty_step=spread["buy_qty_step"],
@@ -87,7 +86,7 @@ class PositionManager:
 
         logger.info(
             f"📈 Opened position #{position_id} | "
-            f"{symbol} | {spread['buy_exchange']}/{spread['sell_exchange']} | "
+            f"{symbol} | {spread['long_exchange']}/{spread['short_exchange']} | "
             f"Entry spread: {spread['spread_pct']:.4f}% | "
             f"Quantity: {spread['btc_amount']:.6f} | "
             f"Expected ROI: {spread['roi_pct']:.2f}%"
@@ -121,32 +120,21 @@ class PositionManager:
         self,
         position_id: int,
         position: Position,
-        exit_spread: Optional[dict],
+        exit_spread: dict,
         close_reason: str,
     ):
-        if exit_spread is None:
-            exit_data = {
-                "exit_buy_price": position.entry_buy_price,
-                "exit_sell_price": position.entry_sell_price,
-                "exit_spread_pct": position.entry_spread_pct,
-                "gross_profit_usd": 0.0,
-                "fees_usd": 0.0,
-                "net_profit_usd": 0.0,
-                "roi_pct": 0.0,
-                "close_reason": close_reason,
-            }
-        else:
-            pnl = self._calculate_pnl(position, exit_spread)
-            exit_data = {
-                "exit_buy_price": exit_spread["exit_price_on_buy_exchange"],
-                "exit_sell_price": exit_spread["exit_price_on_sell_exchange"],
-                "exit_spread_pct": exit_spread["spread_pct"],
-                "gross_profit_usd": pnl["gross_profit_usd"],
-                "fees_usd": pnl["fees_usd"],
-                "net_profit_usd": pnl["net_profit_usd"],
-                "roi_pct": pnl["roi_pct"],
-                "close_reason": close_reason,
-            }
+        pnl = self._calculate_pnl(position, exit_spread)
+        exit_data = {
+            "exit_long_price": exit_spread["exit_long_price"],
+            "exit_short_price": exit_spread["exit_short_price"],
+            "exit_spread_pct": pnl["exit_spread_pct"],
+            "gross_profit_usd": pnl["gross_pnl_usd"],
+            "exit_fees_usd": pnl["exit_fees_usd"],
+            "total_fees_usd": pnl["total_fees_usd"],
+            "net_profit_usd": pnl["net_pnl_usd"],
+            "roi_pct": pnl["roi_pct"],
+            "close_reason": close_reason,
+        }
 
         await self.db.close_position(position_id, exit_data)
 
@@ -158,36 +146,25 @@ class PositionManager:
         )
 
     def _calculate_pnl(self, position: Position, exit_spread: dict) -> dict:
-        quantity = position.quantity
+        from .calculations import calculate_position_pnl, calculate_fees
 
-        # Calculate P&L for each leg separately
-        # Buy exchange leg: bought at entry_buy_price, sell at current bid
-        buy_exchange_pnl = (
-            exit_spread["exit_price_on_buy_exchange"] - position.entry_buy_price
-        ) * quantity
+        # Calculate actual exit fees using exit prices
+        exit_fees = calculate_fees(
+            quantity=position.quantity,
+            long_price=exit_spread["exit_long_price"],
+            short_price=exit_spread["exit_short_price"],
+            long_fee_pct=exit_spread["long_fee_pct"],
+            short_fee_pct=exit_spread["short_fee_pct"],
+        )
 
-        # Sell exchange leg: sold at entry_sell_price, buy back at current ask
-        sell_exchange_pnl = (
-            position.entry_sell_price - exit_spread["exit_price_on_sell_exchange"]
-        ) * quantity
-
-        # Gross P&L is sum of both legs
-        gross_pnl = buy_exchange_pnl + sell_exchange_pnl
-
-        # Calculate exit fees from exit_spread
-        exit_fees = exit_spread.get("total_fees_usd", 0)
-
-        # Total fees = entry fees (stored) + exit fees
-        entry_fees = position.entry_fees_usd
-        total_fees = entry_fees + exit_fees
-
-        # Net P&L
-        net_pnl = gross_pnl - total_fees
-        roi = (net_pnl / position.margin_used_usd) * 100
-
-        return {
-            "gross_profit_usd": gross_pnl,
-            "fees_usd": total_fees,
-            "net_profit_usd": net_pnl,
-            "roi_pct": roi,
-        }
+        # Use centralized PnL calculation
+        return calculate_position_pnl(
+            quantity=position.quantity,
+            entry_long_price=position.entry_long_price,
+            entry_short_price=position.entry_short_price,
+            exit_long_price=exit_spread["exit_long_price"],
+            exit_short_price=exit_spread["exit_short_price"],
+            entry_fees_usd=position.entry_fees_usd,
+            exit_fees_usd=exit_fees,
+            margin_used_usd=position.margin_used_usd,
+        )

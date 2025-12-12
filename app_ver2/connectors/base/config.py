@@ -12,7 +12,6 @@ class ConnectorConfig:
     initial_reconnect_delay: float = 3.0
     max_reconnect_delay: float = 60.0
     max_retries: int = 10
-    queue_size: int = 1000
     staleness_threshold: float = 5.0  # seconds
 
     def calculate_backoff(self, attempt: int) -> float:

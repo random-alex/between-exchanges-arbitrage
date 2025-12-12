@@ -1,6 +1,5 @@
 """OKX WebSocket connector."""
 
-import asyncio
 import json
 import websockets
 
@@ -11,8 +10,8 @@ from app_ver2.connectors.base import BaseConnector, ConnectorConfig
 class OKXConnector(BaseConnector):
     """OKX WebSocket connector with automatic reconnection."""
 
-    def __init__(self, config: ConnectorConfig, logger):
-        super().__init__(config, logger)
+    def __init__(self, config: ConnectorConfig, logger, data_store: dict):
+        super().__init__(config, logger, data_store)
         self.url = "wss://wspap.okx.com:8443/ws/v5/public"
 
     @property
@@ -40,7 +39,7 @@ class OKXConnector(BaseConnector):
         """Send WebSocket ping."""
         await self.ws.ping()
 
-    def _handle_message(self, message: str) -> None:
+    async def _handle_message(self, message: str) -> None:
         """Handle incoming OKX message."""
         # Update WebSocket liveness timestamp FIRST (any message)
         self._update_message_timestamp()
@@ -65,10 +64,8 @@ class OKXConnector(BaseConnector):
             # Update data freshness timestamp AFTER successful parse
             self._update_data_timestamp()
 
-            try:
-                self.queue.put_nowait(ticker)
-            except asyncio.QueueFull:
-                self.logger.queue_full()
+            # Direct dict update - simple and fast
+            self.data_store[ticker.normalized_instrument_id] = ticker
 
         except (KeyError, IndexError, ValueError, json.JSONDecodeError) as e:
-            self.logger.parse_error(e, message[:100])
+            await self.logger.parse_error(e, message[:100])

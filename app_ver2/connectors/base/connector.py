@@ -16,10 +16,12 @@ from rate_limited_logger import RateLimitedLogger
 class BaseConnector(ABC):
     """Abstract base class for exchange WebSocket connectors."""
 
-    def __init__(self, config: ConnectorConfig, logger: RateLimitedLogger):
+    def __init__(
+        self, config: ConnectorConfig, logger: RateLimitedLogger, data_store: dict
+    ):
         self.config = config
         self.state = ConnectionState.DISCONNECTED
-        self.queue: asyncio.Queue = asyncio.Queue(maxsize=config.queue_size)
+        self.data_store = data_store
         self._retry_count = 0
         self._running = False
         self.logger = logger
@@ -51,7 +53,7 @@ class BaseConnector(ABC):
         pass
 
     @abstractmethod
-    def _handle_message(self, message: str) -> None:
+    async def _handle_message(self, message: str) -> None:
         """Handle incoming message (exchange-specific parsing)."""
         pass
 
@@ -104,7 +106,7 @@ class BaseConnector(ABC):
 
                 # Non-blocking receive with shorter timeout
                 message = await asyncio.wait_for(self.ws.recv(), timeout=10.0)
-                self._handle_message(message)
+                await self._handle_message(message)
 
             except asyncio.TimeoutError:
                 # recv() timeout - check health and continue
@@ -171,7 +173,7 @@ class BaseConnector(ABC):
 
                 self._retry_count += 1
                 self.state = ConnectionState.RECONNECTING
-                self.logger.connection_error(
+                await self.logger.connection_error(
                     e, self._retry_count, self.config.max_retries
                 )
 

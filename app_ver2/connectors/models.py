@@ -27,7 +27,7 @@ class Ticker(BaseModel):
 
     instrument_id: str = Field(alias="instId")
     ts: int
-    exchange: Literal["okx", "bybit", "binance", "deribit"]
+    exchange: Literal["okx", "bybit", "binance", "deribit", "bitget", "mexc"]
 
     @computed_field
     def datetime(self) -> datetime:

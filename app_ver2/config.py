@@ -20,8 +20,7 @@ class Config:
     MIN_ROI_FOR_LOGGING = 0.5
 
     # Monitoring
-    QUEUE_TIMEOUT = 60.0
-    STATS_INTERVAL = 300.0
+    STATS_INTERVAL = 60.0
     SPREAD_CHECK_INTERVAL = 1.0
     LOG_COOLDOWN = 60.0
     LOGGER_WINDOW = 10.0
@@ -104,6 +103,23 @@ def load_config() -> dict[str, ConnectorConfig]:
         "ALGO_USDC-PERPETUAL",
     ]
 
+    # Bitget USDT perpetual futures
+    bitget_instruments = [
+        "SOLUSDT",
+        "ADAUSDT",
+        "XRPUSDT",
+        "BNBUSDT",
+        "AVAXUSDT",
+        "DOGEUSDT",
+        "DOTUSDT",
+        "LINKUSDT",
+        "LTCUSDT",
+        "UNIUSDT",
+        "TRXUSDT",
+        "NEARUSDT",
+        "ALGOUSDT",
+    ]
+
     return {
         "bybit": ConnectorConfig(
             name="bybit",
@@ -129,6 +145,13 @@ def load_config() -> dict[str, ConnectorConfig]:
         "deribit": ConnectorConfig(
             name="deribit",
             instruments=deribit_instruments,
+            initial_reconnect_delay=3.0,
+            max_reconnect_delay=60.0,
+            max_retries=10,
+        ),
+        "bitget": ConnectorConfig(
+            name="bitget",
+            instruments=bitget_instruments,
             initial_reconnect_delay=3.0,
             max_reconnect_delay=60.0,
             max_retries=10,

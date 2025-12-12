@@ -45,62 +45,45 @@ async def _check_position(
     exchange_data: dict,
     instrument_fetcher: InstrumentFetcher,
 ):
-    buy_data = exchange_data.get(position.buy_exchange, {})
-    sell_data = exchange_data.get(position.sell_exchange, {})
+    long_data = exchange_data.get(position.long_exchange, {})
+    short_data = exchange_data.get(position.short_exchange, {})
 
-    buy_ticker = buy_data.get(position.symbol)
-    sell_ticker = sell_data.get(position.symbol)
+    long_ticker = long_data.get(position.symbol)
+    short_ticker = short_data.get(position.symbol)
 
-    if not buy_ticker or not sell_ticker:
-        should_close, reason = await position_manager.should_close(position, None)
-        if should_close:
-            await position_manager.close_position(position.id, position, None, reason)
+    if not long_ticker or not short_ticker:
         return
 
     # Get current prices for exit
-    # To close: sell where we bought (at bid), buy where we sold (at ask)
-    exit_price_on_buy_exchange = (
-        buy_ticker.bid_price
-    )  # Sell at bid on exchange where we bought
-    exit_price_on_sell_exchange = (
-        sell_ticker.ask_price
-    )  # Buy at ask on exchange where we sold
+    # To close long: sell at bid on long exchange
+    # To close short: buy at ask on short exchange
+    exit_long_price = long_ticker.bid_price
+    exit_short_price = short_ticker.ask_price
 
     # Current spread from position's perspective
     # Spread converged if this approaches zero or goes negative
-    current_spread_pct = (
-        (exit_price_on_buy_exchange - exit_price_on_sell_exchange)
-        / exit_price_on_sell_exchange
-    ) * 100
+    current_spread_pct = ((exit_long_price - exit_short_price) / exit_short_price) * 100
 
-    # Get fee specs for exit fee calculation
-    buy_spec = instrument_fetcher.get_spec(
-        position.buy_exchange, position.buy_instrument
+    # Get fee specs for exit fee calculation (separate for each exchange)
+    long_spec = instrument_fetcher.get_spec(
+        position.long_exchange, position.buy_instrument
     )
-    sell_spec = instrument_fetcher.get_spec(
-        position.sell_exchange, position.sell_instrument
+    short_spec = instrument_fetcher.get_spec(
+        position.short_exchange, position.sell_instrument
     )
-    fee_pct = buy_spec.fee_pct + sell_spec.fee_pct
 
     # Build exit data for P&L calculation
-    # Use clear naming: price on the exchange where we originally bought/sold
     current_spread = {
-        "exit_price_on_buy_exchange": exit_price_on_buy_exchange,
-        "exit_price_on_sell_exchange": exit_price_on_sell_exchange,
+        "exit_long_price": exit_long_price,
+        "exit_short_price": exit_short_price,
         "spread_pct": current_spread_pct,
-        "notional_usd": position.quantity
-        * (exit_price_on_buy_exchange + exit_price_on_sell_exchange)
-        / 2,
-        "total_fees_usd": position.quantity
-        * (exit_price_on_buy_exchange + exit_price_on_sell_exchange)
-        / 2
-        * fee_pct
-        / 100,
+        "long_fee_pct": long_spec.fee_pct,
+        "short_fee_pct": short_spec.fee_pct,
     }
 
     should_close, reason = await position_manager.should_close(position, current_spread)
 
-    if should_close:
+    if should_close and reason:
         await position_manager.close_position(
             position.id, position, current_spread, reason
         )

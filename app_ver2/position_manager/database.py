@@ -8,6 +8,7 @@ from sqlmodel import SQLModel, select, func, or_
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
 from sqlalchemy.pool import StaticPool
+from sqlalchemy import text
 
 from .models import Position
 
@@ -48,10 +49,13 @@ class PositionDB:
                 raise
 
     async def initialize(self):
-        """Initialize database schema."""
+        """Initialize database with WAL mode for better concurrency."""
         async with self.engine.begin() as conn:
             await conn.run_sync(SQLModel.metadata.create_all)
-        logger.info(f"Initialized database at {self.db_path}")
+            # Enable Write-Ahead Logging for concurrent reads during writes
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
+            await conn.execute(text("PRAGMA synchronous=NORMAL"))
+        logger.info(f"Initialized database with WAL mode at {self.db_path}")
 
     async def create_position(self, position: Position) -> int:
         """Create a new position and return its ID."""
@@ -74,7 +78,7 @@ class PositionDB:
             result = await session.exec(
                 select(Position)
                 .where(Position.status == "closed")
-                .order_by(Position.closed_at.desc())
+                .order_by(Position.closed_at.desc())  # pyright: ignore
                 .limit(limit)
             )
             return list(result.all())
@@ -100,10 +104,10 @@ class PositionDB:
                     Position.symbol == symbol,
                     Position.status == "open",
                     or_(
-                        Position.buy_exchange == exchange1,
-                        Position.buy_exchange == exchange2,
-                        Position.sell_exchange == exchange1,
-                        Position.sell_exchange == exchange2,
+                        Position.long_exchange == exchange1,
+                        Position.long_exchange == exchange2,
+                        Position.short_exchange == exchange1,
+                        Position.short_exchange == exchange2,
                     ),
                 )
                 .limit(1)
@@ -125,11 +129,12 @@ class PositionDB:
             # Update position fields
             position.status = "closed"
             position.closed_at = datetime.now()
-            position.exit_buy_price = exit_data["exit_buy_price"]
-            position.exit_sell_price = exit_data["exit_sell_price"]
+            position.exit_long_price = exit_data["exit_long_price"]
+            position.exit_short_price = exit_data["exit_short_price"]
             position.exit_spread_pct = exit_data["exit_spread_pct"]
             position.gross_profit_usd = exit_data["gross_profit_usd"]
-            position.fees_usd = exit_data["fees_usd"]
+            position.exit_fees_usd = exit_data["exit_fees_usd"]
+            position.total_fees_usd = exit_data["total_fees_usd"]
             position.net_profit_usd = exit_data["net_profit_usd"]
             position.roi_pct = exit_data["roi_pct"]
             position.close_reason = exit_data["close_reason"]
@@ -160,7 +165,7 @@ class PositionDB:
                 stats_result = await session.exec(
                     select(
                         func.sum(Position.net_profit_usd).label("total_pnl"),
-                        func.sum(func.iif(Position.net_profit_usd > 0, 1, 0)).label(
+                        func.sum(func.iif(Position.net_profit_usd > 0, 1, 0)).label(  # pyright: ignore[reportOptionalOperand]
                             "wins"
                         ),
                         func.avg(Position.roi_pct).label("avg_roi"),

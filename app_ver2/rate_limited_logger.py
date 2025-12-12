@@ -1,11 +1,11 @@
 """Rate-limited logging to prevent log spam."""
 
+import asyncio
 import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, Tuple
-import threading
 
 
 @dataclass
@@ -40,7 +40,7 @@ class RateLimitedLogger:
         self._stats: Dict[Tuple[str, str], LogStats] = defaultdict(
             lambda: LogStats(first_seen=time.time(), last_seen=time.time())
         )
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
         self._last_summary = time.time()
         self._summary_interval = 60.0
 
@@ -63,11 +63,11 @@ class RateLimitedLogger:
 
         return (now - stats.last_logged) >= self.window
 
-    def _log_with_rate_limit(self, level: int, category: str, message: str):
+    async def _log_with_rate_limit(self, level: int, category: str, message: str):
         """Log a message with rate limiting."""
         key = (level, category)
 
-        with self._lock:
+        async with self._lock:
             stats = self._stats[key]  # pyright: ignore[reportArgumentType]
             stats.add_occurrence(message)
             now = time.time()
@@ -88,12 +88,12 @@ class RateLimitedLogger:
                 stats.last_logged = now
 
             if (now - self._last_summary) >= self._summary_interval:
-                self._log_summary()
+                await self._log_summary()
                 self._last_summary = now
 
-    def _log_summary(self):
+    async def _log_summary(self):
         """Log a summary of all rate-limited messages."""
-        with self._lock:
+        async with self._lock:
             now = time.time()
             active_stats = [
                 (cat, stats)
@@ -121,38 +121,21 @@ class RateLimitedLogger:
             if len(summary_lines) > 1:
                 self.base_logger.info("\n".join(summary_lines))
 
-    def parse_error(self, error: Exception, message_sample: str = ""):
+    async def parse_error(self, error: Exception, message_sample: str = ""):
         """Log a parse error with rate limiting."""
         self._parse_errors += 1
         msg = f"{self.name} parse error: {type(error).__name__}: {str(error)}"
         if message_sample:
             msg += f" | Sample: {message_sample[:200]}..."
-        self._log_with_rate_limit(logging.WARNING, f"{self.name}_parse", msg)
+        await self._log_with_rate_limit(logging.WARNING, f"{self.name}_parse", msg)
 
-    def queue_full(self):
-        """Log a queue full event with rate limiting."""
-        self._queue_drops += 1
-        self._log_with_rate_limit(
-            logging.WARNING,
-            f"{self.name}_queue",
-            f"{self.name} queue full, dropping message",
-        )
-
-    def connection_error(self, error: Exception, retry: int, max_retries: int):
+    async def connection_error(self, error: Exception, retry: int, max_retries: int):
         """Log a connection error with rate limiting."""
         self._connection_errors += 1
-        self._log_with_rate_limit(
+        await self._log_with_rate_limit(
             logging.ERROR,
             f"{self.name}_connection",
             f"{self.name} connection failed: {error} (retry {retry}/{max_retries})",
-        )
-
-    def stale_data(self, instrument: str, age_seconds: float):
-        """Log stale data with rate limiting."""
-        self._log_with_rate_limit(
-            logging.WARNING,
-            f"{self.name}_stale",
-            f"{self.name} stale data for {instrument}: {age_seconds:.1f}s old",
         )
 
     def info(self, message: str):
@@ -171,11 +154,7 @@ class RateLimitedLogger:
             "connection_errors": self._connection_errors,
         }
 
-    def force_summary(self):
-        """Force log a summary now."""
-        self._log_summary()
-
-    def log_opportunity(
+    async def log_opportunity(
         self,
         exchange1: str,
         exchange2: str,
@@ -202,7 +181,7 @@ class RateLimitedLogger:
         # Create unique key for this opportunity
         key = f"{exchange1}:{exchange2}:{symbol}"
 
-        with self._lock:
+        async with self._lock:
             now = time.time()
             last_logged = self._opportunity_cooldowns.get(key, 0)
 

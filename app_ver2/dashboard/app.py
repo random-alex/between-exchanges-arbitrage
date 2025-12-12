@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from position_manager import PositionDB
+from position_manager.database import PositionDB
 
 
 st.set_page_config(page_title="Arbitrage Monitor", page_icon="📊", layout="wide")
@@ -79,8 +79,8 @@ def main():
                 {
                     "ID": f"#{p.id}",
                     "Symbol": p.symbol,
-                    "Buy": p.buy_exchange,
-                    "Sell": p.sell_exchange,
+                    "Long": p.long_exchange,
+                    "Short": p.short_exchange,
                     "Entry Spread %": f"{p.entry_spread_pct:.4f}",
                     "Quantity": f"{p.quantity:.6f}",
                     "Notional": f"${p.notional_usd:.2f}",
@@ -108,12 +108,17 @@ def main():
                 {
                     "ID": f"#{p.id}",
                     "Symbol": p.symbol,
-                    "Buy": p.buy_exchange,
-                    "Sell": p.sell_exchange,
+                    "Long": p.long_exchange,
+                    "Short": p.short_exchange,
                     "Entry %": f"{p.entry_spread_pct:.4f}",
                     "Exit %": f"{p.exit_spread_pct:.4f}" if p.exit_spread_pct else "0",
                     "P&L": f"${p.net_profit_usd:.2f}" if p.net_profit_usd else "$0.00",
                     "ROI %": f"{p.roi_pct:.2f}" if p.roi_pct else "0.00",
+                    "Entry long price": f"{p.entry_long_price:.4f}",
+                    "Exit long price": f"{p.exit_long_price:.4f}",
+                    "Entry short price": f"{p.entry_short_price:.4f}",
+                    "Exit short price": f"{p.exit_short_price:.4f}",
+                    "Qnt": f"{p.quantity:.2f}",
                     "Hold": f"{hold_hours:.1f}h",
                     "Reason": p.close_reason or "-",
                 }
