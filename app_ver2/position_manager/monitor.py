@@ -229,11 +229,25 @@ async def _check_position(
 
         elif force_close:
             # FORCE CLOSE: Close anyway despite low liquidity (stop loss / max time)
+
+            # Check for severe asymmetric liquidity during force close
+            min_order_qty = max(long_spec.min_order_qnt, short_spec.min_order_qnt)
+            long_has_any = liquidity_check["available_long_qty"] >= min_order_qty
+            short_has_any = liquidity_check["available_short_qty"] >= min_order_qty
+
+            asymmetric_msg = ""
+            if long_has_any and not short_has_any:
+                asymmetric_msg = " | ⚠️ ASYMMETRIC: Long has liquidity, Short does NOT"
+            elif short_has_any and not long_has_any:
+                asymmetric_msg = " | ⚠️ ASYMMETRIC: Short has liquidity, Long does NOT"
+            elif not long_has_any and not short_has_any:
+                asymmetric_msg = " | ⚠️ CRITICAL: BOTH sides have NO liquidity"
+
             logger.error(
                 f"🚨 FORCE CLOSING position #{position.id} despite insufficient liquidity | "
                 f"{position.symbol} | Reason: {reason} | "
                 f"Liquidity: {liquidity_check['liquidity_ratio'] * 100:.1f}% | "
-                f"Estimated slippage: ${total_slippage_estimate_usd:.2f}"
+                f"Estimated slippage: ${total_slippage_estimate_usd:.2f}{asymmetric_msg}"
             )
 
             await position_manager.close_position(
@@ -256,6 +270,29 @@ async def _check_position(
 
         else:
             # WAIT: Insufficient liquidity, not force close scenario
+
+            # Check for asymmetric liquidity (one side can close, other cannot)
+            min_order_qty = max(long_spec.min_order_qnt, short_spec.min_order_qnt)
+            long_can_close = liquidity_check["available_long_qty"] >= required_qty
+            short_can_close = liquidity_check["available_short_qty"] >= required_qty
+
+            if long_can_close and not short_can_close:
+                logger.warning(
+                    f"⚠️ ASYMMETRIC LIQUIDITY: Position #{position.id} | "
+                    f"{position.symbol} {position.long_exchange}/{position.short_exchange} | "
+                    f"Long side CAN close ({liquidity_check['available_long_qty']:.6f} available) | "
+                    f"Short side CANNOT ({liquidity_check['available_short_qty']:.6f} < {required_qty:.6f}) | "
+                    f"In REAL trading this would create UNHEDGED EXPOSURE"
+                )
+            elif short_can_close and not long_can_close:
+                logger.warning(
+                    f"⚠️ ASYMMETRIC LIQUIDITY: Position #{position.id} | "
+                    f"{position.symbol} {position.long_exchange}/{position.short_exchange} | "
+                    f"Short side CAN close ({liquidity_check['available_short_qty']:.6f} available) | "
+                    f"Long side CANNOT ({liquidity_check['available_long_qty']:.6f} < {required_qty:.6f}) | "
+                    f"In REAL trading this would create UNHEDGED EXPOSURE"
+                )
+
             await _log_liquidity_warning(position, liquidity_check, position_manager)
 
             # Record failed attempt

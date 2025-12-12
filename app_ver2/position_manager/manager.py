@@ -217,9 +217,9 @@ class PositionManager:
         position.exit_fees_usd = (position.exit_fees_usd or 0) + chunk_pnl[
             "exit_fees_usd"
         ]
-        position.total_fees_usd = (position.total_fees_usd or 0) + chunk_pnl[
-            "exit_fees_usd"
-        ]
+        position.total_fees_usd = position.entry_fees_usd + (
+            position.exit_fees_usd or 0
+        )
         position.exit_long_price = exit_spread["exit_long_price"]
         position.exit_short_price = exit_spread["exit_short_price"]
         position.exit_spread_pct = chunk_pnl["exit_spread_pct"]

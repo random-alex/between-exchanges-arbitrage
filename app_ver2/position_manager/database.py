@@ -98,13 +98,13 @@ class PositionDB:
     async def has_open_position_for_symbol_and_exchanges(
         self, symbol: str, exchange1: str, exchange2: str
     ) -> bool:
-        """Check if either exchange is used in an open position for this symbol."""
+        """Check if either exchange is used in an open or partially closed position for this symbol."""
         async with self.session() as session:
             result = await session.exec(
                 select(Position)
                 .where(
                     Position.symbol == symbol,
-                    Position.status == "open",
+                    Position.status.in_(["open", "partially_closed"]),  # pyright: ignore[reportAttributeAccessIssue]
                     or_(
                         Position.long_exchange == exchange1,
                         Position.long_exchange == exchange2,

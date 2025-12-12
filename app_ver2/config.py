@@ -8,7 +8,7 @@ class Config:
 
     # Position Management
     MIN_ROI_TO_OPEN = 0.05
-    STOP_LOSS_PCT = -10.0
+    STOP_LOSS_PCT = -30.0
     TARGET_CONVERGENCE_PCT = 0.1
     MAX_HOLD_TIME_HOURS = 48
     MIN_SPREAD_PCT = 1.5
