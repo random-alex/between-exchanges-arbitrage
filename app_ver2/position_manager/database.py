@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
 from sqlalchemy.pool import StaticPool
 from sqlalchemy import text
 
-from .models import Position
+from .models import Position, CloseAttempt
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +65,12 @@ class PositionDB:
             return position.id  # pyright: ignore[reportReturnType]
 
     async def get_open_positions(self) -> list[Position]:
-        """Get all open positions."""
+        """Get all open and partially closed positions that need monitoring."""
         async with self.session() as session:
             result = await session.exec(
-                select(Position).where(Position.status == "open")
+                select(Position).where(
+                    Position.status.in_(["open", "partially_closed"])  # pyright: ignore[reportAttributeAccessIssue]
+                )
             )
             return list(result.all())
 
@@ -188,6 +190,32 @@ class PositionDB:
                 "win_rate_pct": win_rate,
                 "avg_roi_pct": avg_roi,
             }
+
+    async def create_close_attempt(self, close_attempt: CloseAttempt) -> int:
+        """Create a new close attempt record and return its ID."""
+        async with self.session() as session:
+            session.add(close_attempt)
+            await session.flush()
+            return close_attempt.id  # pyright: ignore[reportReturnType]
+
+    async def get_close_attempts(
+        self, position_id: int, limit: int = 10
+    ) -> list[CloseAttempt]:
+        """Get close attempts for a position (most recent first)."""
+        async with self.session() as session:
+            result = await session.exec(
+                select(CloseAttempt)
+                .where(CloseAttempt.position_id == position_id)
+                .order_by(CloseAttempt.attempted_at.desc())  # pyright: ignore
+                .limit(limit)
+            )
+            return list(result.all())
+
+    async def update_position(self, position: Position):
+        """Update an existing position."""
+        async with self.session() as session:
+            session.add(position)
+            # Commit happens automatically via context manager
 
     async def close(self):
         """Dispose engine and close all connections."""

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, computed_field, Field
-from typing import Literal
+from typing import Literal, Optional
 from datetime import datetime, timezone
 
 
@@ -19,15 +19,25 @@ class Book(BaseModel):
 
 
 class Ticker(BaseModel):
+    # Level 1 orderbook data (Phase 1 uses only these)
     ask_price: float
-    ask_qnt: float
+    ask_qnt: float  # Phase 1: We validate this for liquidity
 
     bid_price: float
-    bid_qnt: float
+    bid_qnt: float  # Phase 1: We validate this for liquidity
 
     instrument_id: str = Field(alias="instId")
     ts: int
     exchange: Literal["okx", "bybit", "binance", "deribit", "bitget", "mexc"]
+
+    # Phase 2: Orderbook depth (levels 2-5) - NOT populated in Phase 1
+    # These fields prepare for future multi-level slippage calculation
+    ask_depth: Optional[list[tuple[float, float]]] = None  # [(price, qty), ...]
+    bid_depth: Optional[list[tuple[float, float]]] = None
+
+    # Phase 2: Cumulative quantities across levels - NOT populated in Phase 1
+    cumulative_ask_qnt: Optional[float] = None  # Total qty across top N asks
+    cumulative_bid_qnt: Optional[float] = None  # Total qty across top N bids
 
     @computed_field
     def datetime(self) -> datetime:

@@ -1,20 +1,27 @@
 """Configuration loader."""
 
-from connectors.base import ConnectorConfig
+from app_ver2.connectors.base import ConnectorConfig
 
 
 class Config:
     """Application configuration constants."""
 
     # Position Management
-    MIN_ROI_TO_OPEN = 2.0
+    MIN_ROI_TO_OPEN = 0.05
     STOP_LOSS_PCT = -10.0
     TARGET_CONVERGENCE_PCT = 0.1
-    MAX_HOLD_TIME_HOURS = 24
+    MAX_HOLD_TIME_HOURS = 48
     MIN_SPREAD_PCT = 1.5
 
+    # Phase 1: Position Closing Retry Configuration
+    MAX_CLOSE_ATTEMPTS = 10  # Maximum retry attempts before force close
+    RETRY_INITIAL_DELAY_SEC = 30  # Initial delay between retries
+    RETRY_MAX_DELAY_SEC = 600  # Maximum delay (10 minutes)
+    RETRY_BACKOFF_MULTIPLIER = 1.5  # Exponential backoff multiplier
+    MAX_LIQUIDITY_WARNINGS = 5  # Alert threshold for stuck positions
+
     # Spread Calculation
-    CAPITAL = 100.0
+    CAPITAL = 1000.0
     LEVERAGE = 10.0
     MIN_SPREAD_THRESHOLD = 0.05
     MIN_ROI_FOR_LOGGING = 0.5

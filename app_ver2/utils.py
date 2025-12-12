@@ -5,6 +5,7 @@ from pathlib import Path
 from app_ver2.connectors.models import Ticker
 from app_ver2.instrument_fetcher import InstrumentFetcher, InstrumentSpec
 from app_ver2.position_manager.calculations import calculate_fees
+from app_ver2.position_manager.models import Position
 import aiofiles
 import aiocsv
 
@@ -213,6 +214,135 @@ def calculate_spread(
         "liquidity_usd": liquidity,
         "leverage": leverage,
     }
+
+
+def validate_close_liquidity_level1(
+    position: Position,
+    long_ticker: Ticker,
+    short_ticker: Ticker,
+    long_spec: InstrumentSpec,
+    short_spec: InstrumentSpec,
+    min_liquidity_pct: float = 100.0,  # Require 100% of position qty available
+) -> dict:
+    """PHASE 1: Validates liquidity using only level 1 bid/ask quantities.
+
+    To close a position:
+    - Long leg (sell): Need to sell position.quantity on long exchange → check bid_qnt
+    - Short leg (buy): Need to buy position.quantity on short exchange → check ask_qnt
+
+    Args:
+        position: Position to close
+        long_ticker: Current ticker data for long exchange
+        short_ticker: Current ticker data for short exchange
+        long_spec: Instrument spec for long exchange
+        short_spec: Instrument spec for short exchange
+        min_liquidity_pct: Minimum % of position required to be available (default 100%)
+
+    Returns:
+        dict with:
+        - can_close_full: bool - Full position closeable at level 1
+        - can_close_partial: bool - Partial close possible (meets exchange min order size)
+        - available_long_qty: float - Quantity available on long side (bid_qnt)
+        - available_short_qty: float - Quantity available on short side (ask_qnt)
+        - max_closeable_qty: float - Min of both sides
+        - liquidity_ratio: float - Available / Required (0.0-1.0+)
+        - closure_strategy: str - "full", "partial", "wait", or "force"
+        - warning_message: Optional[str] - Human-readable warning if insufficient
+        - long_ratio: float - Long side liquidity ratio
+        - short_ratio: float - Short side liquidity ratio
+    """
+    # Position quantity that needs to be closed
+    required_qty = (
+        position.remaining_quantity
+        if position.remaining_quantity
+        else position.quantity
+    )
+
+    # Get available quantities from level 1
+    # To close long position: sell into bids
+    long_available_qty = long_ticker.bid_qnt
+
+    # To close short position: buy from asks
+    short_available_qty = short_ticker.ask_qnt
+
+    # Determine what's closeable
+    can_close_long = long_available_qty >= required_qty
+    can_close_short = short_available_qty >= required_qty
+    can_close_full = can_close_long and can_close_short
+
+    # Calculate maximum closeable quantity (limited by less liquid side)
+    max_closeable_qty = min(long_available_qty, short_available_qty)
+
+    # Check if partial close meets exchange minimum order requirements
+    min_order_qty = max(long_spec.min_order_qnt, short_spec.min_order_qnt)
+    can_close_partial = (
+        max_closeable_qty >= min_order_qty and max_closeable_qty < required_qty
+    )
+
+    # Calculate liquidity ratios
+    long_ratio = long_available_qty / required_qty if required_qty > 0 else 1.0
+    short_ratio = short_available_qty / required_qty if required_qty > 0 else 1.0
+    liquidity_ratio = min(long_ratio, short_ratio)
+
+    # Determine strategy
+    if can_close_full:
+        strategy = "full"
+        warning = None
+    elif can_close_partial:
+        strategy = "partial"
+        warning = f"Insufficient liquidity for full close. Available: {liquidity_ratio * 100:.1f}%"
+    else:
+        strategy = "wait"
+        warning = f"Insufficient liquidity. Available: {max_closeable_qty:.6f} (min required: {min_order_qty:.6f})"
+
+    return {
+        "can_close_full": can_close_full,
+        "can_close_partial": can_close_partial,
+        "available_long_qty": long_available_qty,
+        "available_short_qty": short_available_qty,
+        "max_closeable_qty": max_closeable_qty,
+        "liquidity_ratio": liquidity_ratio,
+        "closure_strategy": strategy,
+        "warning_message": warning,
+        "long_ratio": long_ratio,
+        "short_ratio": short_ratio,
+    }
+
+
+def estimate_slippage_simple(position_qty: float, available_qty: float) -> float:
+    """PHASE 1: Simple slippage estimation without orderbook depth.
+
+    This is a heuristic-based approach that estimates slippage when closing
+    a position larger than the available level 1 liquidity.
+
+    Heuristic:
+    - If qty <= available: 0% additional slippage (filled at best price)
+    - If qty > available: 0.1% slippage per 10% overage
+
+    Example: If position is 150 BTC and only 100 available:
+    - Overage: 50% (50 BTC / 100 BTC)
+    - Estimated slippage: 0.5% (50% * 0.01)
+
+    Phase 2 will replace this with multi-level orderbook walking for accuracy.
+
+    Args:
+        position_qty: Quantity to close
+        available_qty: Quantity available at level 1
+
+    Returns:
+        Estimated slippage percentage (e.g., 0.5 = 0.5%)
+    """
+    if position_qty <= available_qty:
+        return 0.0
+
+    # Calculate overage percentage
+    overage_pct = ((position_qty - available_qty) / available_qty) * 100
+
+    # 0.1% slippage per 10% overage
+    slippage_pct = overage_pct * 0.01
+
+    # Cap at 2% to avoid unrealistic estimates
+    return min(slippage_pct, 2.0)
 
 
 async def log_to_csv_async(spread_data: dict, symbol: str = "arbitrage_data"):

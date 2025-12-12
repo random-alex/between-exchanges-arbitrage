@@ -126,7 +126,10 @@ async def spread_monitor(
                         f"Spread: {spread['spread_pct']:.4f}% | "
                         f"Profit: ${spread['net_profit_usd']:.4f} | "
                         f"Long: {spread['long_exchange']} @ ${spread['entry_long_price']:.4f} | "
-                        f"Short: {spread['short_exchange']} @ ${spread['entry_short_price']:.4f}",
+                        f"Short: {spread['short_exchange']} @ ${spread['entry_short_price']:.4f} | "
+                        f"Liqudity: {spread['liquidity_usd']:.4f} | "
+                        f"Margin: {spread['margin_used_usd']:.4f} | "
+                        f"Notional: {spread['notional_usd']:.4f}",
                         cooldown=Config.LOG_COOLDOWN,
                     )
 

@@ -10,7 +10,7 @@ from websockets.protocol import State
 
 from .config import ConnectorConfig
 from .state import ConnectionState
-from rate_limited_logger import RateLimitedLogger
+from app_ver2.rate_limited_logger import RateLimitedLogger
 
 
 class BaseConnector(ABC):

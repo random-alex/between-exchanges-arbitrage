@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from .models import Position
+from .models import Position, CloseAttempt
 from .database import PositionDB
 
 logger = logging.getLogger(__name__)
@@ -168,3 +168,226 @@ class PositionManager:
             exit_fees_usd=exit_fees,
             margin_used_usd=position.margin_used_usd,
         )
+
+    async def close_position_partial(
+        self,
+        position: Position,
+        close_quantity: float,
+        exit_spread: dict,
+        close_reason: str,
+    ) -> bool:
+        """Close portion of position and update tracking.
+
+        Args:
+            position: Position to partially close
+            close_quantity: Quantity to close (must be <= remaining_quantity)
+            exit_spread: Exit spread data with prices and fees
+            close_reason: Reason for partial close
+
+        Returns:
+            True if position fully closed after this partial close, False if still open
+        """
+        # Initialize remaining_quantity if first partial close
+        if position.remaining_quantity is None:
+            position.remaining_quantity = position.quantity
+
+        # Validate close quantity
+        if close_quantity > position.remaining_quantity:
+            logger.error(
+                f"Cannot close {close_quantity:.6f} from position #{position.id} "
+                f"(only {position.remaining_quantity:.6f} remaining)"
+            )
+            return False
+
+        # Update remaining quantity
+        position.remaining_quantity -= close_quantity
+
+        # Calculate P&L for this chunk using proportion of original position
+        chunk_pnl = self._calculate_pnl_for_quantity(
+            position, exit_spread, close_quantity
+        )
+
+        # Accumulate P&L (don't overwrite existing partial close P&L)
+        position.gross_profit_usd = (position.gross_profit_usd or 0) + chunk_pnl[
+            "gross_pnl_usd"
+        ]
+        position.net_profit_usd = (position.net_profit_usd or 0) + chunk_pnl[
+            "net_pnl_usd"
+        ]
+        position.exit_fees_usd = (position.exit_fees_usd or 0) + chunk_pnl[
+            "exit_fees_usd"
+        ]
+        position.total_fees_usd = (position.total_fees_usd or 0) + chunk_pnl[
+            "exit_fees_usd"
+        ]
+        position.exit_long_price = exit_spread["exit_long_price"]
+        position.exit_short_price = exit_spread["exit_short_price"]
+        position.exit_spread_pct = chunk_pnl["exit_spread_pct"]
+        position.roi_pct = (position.net_profit_usd / position.margin_used_usd) * 100  # type: ignore
+
+        # Check if position is now fully closed (small threshold for floating point)
+        fully_closed = position.remaining_quantity <= 0.0001
+
+        if fully_closed:
+            position.status = "closed"
+            position.closed_at = datetime.now()
+            position.close_reason = close_reason
+            position.remaining_quantity = 0  # Set to exactly zero
+
+            logger.info(
+                f"✅ Fully closed position #{position.id} after partial closes | "
+                f"{position.symbol} | "
+                f"Final P&L: ${position.net_profit_usd:.2f} ({position.roi_pct:.2f}%)"
+            )
+        else:
+            position.status = "partially_closed"
+            logger.info(
+                f"🔄 Partially closed position #{position.id} | "
+                f"{position.symbol} | "
+                f"Closed {close_quantity:.6f}, remaining {position.remaining_quantity:.6f} | "
+                f"Partial P&L: ${chunk_pnl['net_pnl_usd']:.2f}"
+            )
+
+        # Save to database
+        await self.db.update_position(position)
+
+        return fully_closed
+
+    def _calculate_pnl_for_quantity(
+        self, position: Position, exit_spread: dict, quantity: float
+    ) -> dict:
+        """Calculate P&L for a specific quantity (used in partial closes)."""
+        from .calculations import calculate_position_pnl, calculate_fees
+
+        # Calculate fees proportional to the quantity being closed
+        exit_fees = calculate_fees(
+            quantity=quantity,
+            long_price=exit_spread["exit_long_price"],
+            short_price=exit_spread["exit_short_price"],
+            long_fee_pct=exit_spread["long_fee_pct"],
+            short_fee_pct=exit_spread["short_fee_pct"],
+        )
+
+        # Calculate entry fees proportional to this quantity
+        entry_fees_proportional = position.entry_fees_usd * (
+            quantity / position.quantity
+        )
+
+        # Calculate margin used for this quantity
+        margin_proportional = position.margin_used_usd * (quantity / position.quantity)
+
+        return calculate_position_pnl(
+            quantity=quantity,
+            entry_long_price=position.entry_long_price,
+            entry_short_price=position.entry_short_price,
+            exit_long_price=exit_spread["exit_long_price"],
+            exit_short_price=exit_spread["exit_short_price"],
+            entry_fees_usd=entry_fees_proportional,
+            exit_fees_usd=exit_fees,
+            margin_used_usd=margin_proportional,
+        )
+
+    async def handle_asymmetric_close(
+        self,
+        position: Position,
+        long_closed: bool,
+        short_closed: bool,
+        exit_data: dict,
+    ):
+        """Handle scenario where one leg closes successfully but other fails.
+
+        This is critical for risk management in paper trading simulation.
+        In real trading, this would require immediate hedging action.
+
+        Args:
+            position: Position being closed
+            long_closed: Whether long leg was successfully closed
+            short_closed: Whether short leg was successfully closed
+            exit_data: Exit prices and data
+        """
+        position.long_leg_closed = long_closed
+        position.short_leg_closed = short_closed
+
+        if long_closed and not short_closed:
+            position.status = "partial_leg_closed"
+            position.long_leg_closed_at = datetime.now()
+
+            logger.warning(
+                f"⚠️ ASYMMETRIC CLOSE: Position #{position.id} long leg closed, short leg still open! | "
+                f"{position.symbol} {position.long_exchange}/{position.short_exchange} | "
+                f"This represents UNHEDGED market risk exposure"
+            )
+
+        elif short_closed and not long_closed:
+            position.status = "partial_leg_closed"
+            position.short_leg_closed_at = datetime.now()
+
+            logger.warning(
+                f"⚠️ ASYMMETRIC CLOSE: Position #{position.id} short leg closed, long leg still open! | "
+                f"{position.symbol} {position.long_exchange}/{position.short_exchange} | "
+                f"This represents UNHEDGED market risk exposure"
+            )
+
+        elif long_closed and short_closed:
+            position.status = "closed"
+            position.closed_at = datetime.now()
+
+            logger.info(
+                f"✅ Both legs closed for position #{position.id} | {position.symbol}"
+            )
+
+        # Save updated position
+        await self.db.update_position(position)
+
+    async def record_close_attempt(
+        self,
+        position: Position,
+        long_bid_qnt: float,
+        short_ask_qnt: float,
+        attempted_long_price: float,
+        attempted_short_price: float,
+        attempted_spread_pct: float,
+        success: bool,
+        failure_reason: Optional[str] = None,
+        partial_close: bool = False,
+        closed_quantity: Optional[float] = None,
+    ) -> int:
+        """Record a close attempt for audit trail.
+
+        Args:
+            position: Position being closed
+            long_bid_qnt: Available bid quantity on long exchange
+            short_ask_qnt: Available ask quantity on short exchange
+            attempted_long_price: Bid price attempted for long leg
+            attempted_short_price: Ask price attempted for short leg
+            attempted_spread_pct: Spread at time of attempt
+            success: Whether close was successful
+            failure_reason: Why close failed (if applicable)
+            partial_close: Whether this was a partial close
+            closed_quantity: Quantity closed (if partial)
+
+        Returns:
+            ID of created close attempt record
+        """
+        required_qty = (
+            position.remaining_quantity
+            if position.remaining_quantity
+            else position.quantity
+        )
+
+        close_attempt = CloseAttempt(
+            position_id=position.id,  # pyright: ignore[reportArgumentType]
+            long_bid_qnt=long_bid_qnt,
+            short_ask_qnt=short_ask_qnt,
+            required_qnt=required_qty,
+            liquidity_sufficient=min(long_bid_qnt, short_ask_qnt) >= required_qty,
+            attempted_long_price=attempted_long_price,
+            attempted_short_price=attempted_short_price,
+            attempted_spread_pct=attempted_spread_pct,
+            success=success,
+            failure_reason=failure_reason,
+            partial_close=partial_close,
+            closed_quantity=closed_quantity,
+        )
+
+        return await self.db.create_close_attempt(close_attempt)
